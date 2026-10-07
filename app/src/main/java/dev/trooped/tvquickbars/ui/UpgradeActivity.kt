@@ -42,6 +42,12 @@ class UpgradeActivity : BaseActivity() {
         priceText.text = "Loading..."
         purchaseButton.isEnabled = false
 
+        if (!Purchases.isConfigured) {
+            priceText.text = "Purchases aren't available in this build"
+            restoreButton.isEnabled = false
+            return
+        }
+
         // Fetch the product using the same callback style as your donation code
         val productIds = listOf("plus_unlock")
         Purchases.sharedInstance.getProducts(

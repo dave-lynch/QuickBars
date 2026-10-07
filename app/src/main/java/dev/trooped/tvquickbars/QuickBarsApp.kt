@@ -55,14 +55,17 @@ class QuickBarsApp : Application(), Application.ActivityLifecycleCallbacks {
         //clearHaCredentials()
         //IntegrationPrefs.clearPairing(ctx = this)
 
-        Purchases.configure(
-            PurchasesConfiguration.Builder(this, BuildConfig.REVENUECAT_API_KEY).build()
-        )
+        // Builds without a RevenueCat key (self-built from source) run without purchases
+        if (BuildConfig.REVENUECAT_API_KEY.isNotBlank()) {
+            Purchases.configure(
+                PurchasesConfiguration.Builder(this, BuildConfig.REVENUECAT_API_KEY).build()
+            )
 
-        Purchases.sharedInstance.updatedCustomerInfoListener =
-            UpdatedCustomerInfoListener { info: CustomerInfo ->
-                PlusStatusManager.update(info)
-            }
+            Purchases.sharedInstance.updatedCustomerInfoListener =
+                UpdatedCustomerInfoListener { info: CustomerInfo ->
+                    PlusStatusManager.update(info)
+                }
+        }
 
         AppIdProvider.ensure(applicationContext) // Create a QuickBars ID instance
     }
@@ -74,7 +77,7 @@ class QuickBarsApp : Application(), Application.ActivityLifecycleCallbacks {
     }
 
     override fun onTerminate() {
-        Purchases.sharedInstance.updatedCustomerInfoListener = null
+        if (Purchases.isConfigured) Purchases.sharedInstance.updatedCustomerInfoListener = null
         super.onTerminate()
     }
 

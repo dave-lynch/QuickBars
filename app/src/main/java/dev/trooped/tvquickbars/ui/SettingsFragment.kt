@@ -359,6 +359,10 @@ class SettingsFragment : Fragment(), HomeAssistantListener {
 
 
     private fun purchaseDonation(productId: String) {
+        if (!Purchases.isConfigured) {
+            Toast.makeText(requireContext(), "Purchases aren't available in this build", Toast.LENGTH_SHORT).show()
+            return
+        }
         Purchases.sharedInstance.getProducts(
             listOf(productId),
             object : GetStoreProductsCallback {
