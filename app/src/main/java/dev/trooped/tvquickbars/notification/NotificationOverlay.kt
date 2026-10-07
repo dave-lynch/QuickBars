@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
@@ -95,8 +96,13 @@ fun NotificationOverlay(
     bgColorHex: String?,
     transparency: Double?,
     onDismissRequest: () -> Unit,
-    maxWidthDp: Int = 600
+    maxWidthDp: Int = 600,
+    imageOnly: Boolean = false
 ) {
+    if (imageOnly && !imageUrl.isNullOrBlank()) {
+        ImageOnlyOverlay(imageUrl = imageUrl, maxWidthDp = maxWidthDp, onDismissRequest = onDismissRequest)
+        return
+    }
     val bgColor = remember(bgColorHex, transparency) {
         val opaque = parseRgbHex(bgColorHex) ?: Color(0xFF222222)
         val alpha = (1.0 - (transparency ?: 0.0)).coerceIn(0.0, 1.0)
@@ -642,4 +648,51 @@ private fun Color.toHex(): String {
     val g = (argb shr 8) and 0xFF
     val b = (argb) and 0xFF
     return String.format("#%02X%02X%02X", r, g, b)
+}
+
+
+/**
+ * "image_only": the picture is the whole notification (e.g. a banner drawn by Home Assistant with its own rounded
+ * corners and shadow). No card, padding, text or fixed 200dp box: the image keeps its own aspect ratio, so a wide
+ * banner sits right at the window edge instead of being letterboxed in the middle of a tall box.
+ */
+@Composable
+private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, onDismissRequest: () -> Unit) {
+    val ctx = LocalContext.current
+    val (abs, isHaImg) = remember(imageUrl) { resolveAgainstHaBase(ctx, imageUrl) }
+    val token = remember(isHaImg) { if (isHaImg) SecurePrefsManager.getHAToken(ctx) else null }
+    var aspect by remember(imageUrl) { mutableStateOf<Float?>(null) }
+    var visible by remember(imageUrl) { mutableStateOf(false) }
+    val alpha by animateFloatAsState(targetValue = if (visible) 1f else 0f, animationSpec = tween(220), label = "imgOnlyAlpha")
+    val width = minOf(maxWidthDp, 520).dp
+    val req = remember(abs, token) {
+        ImageRequest.Builder(ctx)
+            .data(abs)
+            .crossfade(false)
+            .apply {
+                if (!token.isNullOrBlank() && isHaImg) {
+                    addHeader("Authorization", "Bearer $token")
+                    addHeader("Accept", "image/*")
+                }
+            }
+            .build()
+    }
+    AsyncImage(
+        model = req,
+        contentDescription = null,
+        modifier = Modifier
+            .width(width)
+            .then(if (aspect != null) Modifier.aspectRatio(aspect!!) else Modifier.height(1.dp))
+            .alpha(alpha)
+            .onPreviewKeyEvent {
+                if (it.key == Key.Back && it.type == KeyEventType.KeyUp) { onDismissRequest(); true } else false
+            },
+        contentScale = ContentScale.Fit,
+        onSuccess = { success ->
+            val d = success.result.drawable
+            if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) aspect = d.intrinsicWidth.toFloat() / d.intrinsicHeight
+            visible = true
+        },
+        onError = { onDismissRequest() }
+    )
 }

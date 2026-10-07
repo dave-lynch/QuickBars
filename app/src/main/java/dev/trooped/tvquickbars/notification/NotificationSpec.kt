@@ -19,6 +19,8 @@ data class NotificationSpec(
     val soundVolumePercent: Int?,   // 0..200 (0=mute, 100=normal, >100 boosted)
     val iconSvgDataUri: String?,    // inline SVG data URI if provided
     val cid: String?,                // correlation id echoed from HA fire
+    val imageOnly: Boolean = false,  // "image_only": show just the picture at its own aspect ratio (no card, text box or padding)
+    val marginDp: Int? = null,       // "margin": distance from the screen edges in dp (default 12)
 )
 
 private fun JSONObject.stringOrNull(key: String): String? =
@@ -90,6 +92,8 @@ fun JSONObject.toNotificationSpec(cid: String?): NotificationSpec {
         soundUrl = soundUrl,
         iconSvgDataUri = iconModel,
         cid = cid,
-        soundVolumePercent = soundPct
+        soundVolumePercent = soundPct,
+        imageOnly = optBoolean("image_only", false) && imageUrl != null,
+        marginDp = optInt("margin", -1).takeIf { it in 0..200 }
     )
 }

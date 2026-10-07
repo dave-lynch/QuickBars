@@ -174,7 +174,8 @@ class NotificationController(
                         bgColorHex       = spec.colorHex,
                         transparency     = spec.transparency,
                         onDismissRequest = { hideNotification() },
-                        maxWidthDp       = maxOverlayWidthDp()
+                        maxWidthDp       = maxOverlayWidthDp(),
+                        imageOnly        = spec.imageOnly
                     )
                 }
 
@@ -258,7 +259,7 @@ class NotificationController(
             /* _format = */ PixelFormat.TRANSLUCENT
         ).apply {
             this.gravity = gravity
-            val m = (12 * context.resources.displayMetrics.density).toInt()
+            val m = ((spec.marginDp ?: 12) * context.resources.displayMetrics.density).toInt()
             x = m; y = m
             windowAnimations = 0
         }
