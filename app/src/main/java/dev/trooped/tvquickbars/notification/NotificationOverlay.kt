@@ -1,5 +1,7 @@
 package dev.trooped.tvquickbars.notification
 
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.spring
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.util.Base64
@@ -667,6 +669,12 @@ private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, aspectHint: Floa
     var aspect by remember(imageUrl) { mutableStateOf(aspectHint ?: 5f) }
     var visible by remember(imageUrl) { mutableStateOf(false) }
     val alpha by animateFloatAsState(targetValue = if (visible) 1f else 0f, animationSpec = tween(220), label = "imgOnlyAlpha")
+    // Slides in from the right edge once the picture has loaded (iOS-style spring, slight settle)
+    val slide by animateFloatAsState(
+        targetValue = if (visible) 0f else 1f,
+        animationSpec = spring(dampingRatio = 0.82f, stiffness = 260f),
+        label = "imgOnlySlide"
+    )
     val width = minOf(maxWidthDp, 520).dp
     val req = remember(abs, token) {
         ImageRequest.Builder(ctx)
@@ -687,7 +695,7 @@ private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, aspectHint: Floa
         modifier = Modifier
             .width(width)
             .aspectRatio(aspect)
-            .alpha(alpha)
+            .graphicsLayer { translationX = slide * size.width; this.alpha = alpha }
             .onPreviewKeyEvent {
                 if (it.key == Key.Back && it.type == KeyEventType.KeyUp) { onDismissRequest(); true } else false
             },
