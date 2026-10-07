@@ -183,7 +183,7 @@ fun QuickBarOverlay(
         bar.useGridLayout ->
             PaddingValues(8.dp) // Default grid padding for top/bottom
         else ->
-            PaddingValues(16.dp) // Standard padding
+            PaddingValues(12.dp) // Standard padding
     }
 
     // Inner content padding
@@ -197,7 +197,7 @@ fun QuickBarOverlay(
         bar.useGridLayout ->
             PaddingValues(8.dp) // Default grid inner padding
         else ->
-            PaddingValues(16.dp) // Standard inner padding
+            PaddingValues(10.dp) // Standard inner padding
     }
 
     MaterialTheme {
@@ -223,7 +223,7 @@ fun QuickBarOverlay(
             Column(
                 modifier = Modifier
                     .background(androidx.compose.ui.graphics.Brush.verticalGradient(
-                        listOf(Color(0xF01C1828), Color(0xF03A1E54))))
+                        listOf(Color(0xFA15121E), Color(0xFA2C1744))))
                     .padding(contentPadding)
             ) {
                 if (bar.showNameInOverlay || bar.showTimeOnQuickBar) {

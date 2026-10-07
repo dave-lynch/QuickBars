@@ -191,9 +191,13 @@ fun EntityCard(
         label = "contentColorAnim"
     )
 
+    // Scripts / scenes / buttons are actions whose state is always "off": show their normal ("on") icon, not the
+    // crossed-out off icon.
+    val isActionEntity = isScript || isScene || isButton
     val iconRes =
         remember(entity.id, entity.state, entity.customIconOnName, entity.customIconOffName) {
-            EntityIconMapper.getFinalIconForEntity(entity) ?: R.drawable.ic_default
+            (if (isActionEntity) EntityIconMapper.getDisplayIconForEntity(entity) else EntityIconMapper.getFinalIconForEntity(entity))
+                .takeIf { it != 0 } ?: R.drawable.ic_default
         }
 
     var isPressed by remember { mutableStateOf(false) }
@@ -369,14 +373,14 @@ fun EntityCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                tile(38)
+                tile(32)
                 Text(
                     text = displayName,
                     color = textColor,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
