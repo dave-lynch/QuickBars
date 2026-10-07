@@ -21,6 +21,7 @@ data class NotificationSpec(
     val cid: String?,                // correlation id echoed from HA fire
     val imageOnly: Boolean = false,  // "image_only": show just the picture at its own aspect ratio (no card, text box or padding)
     val marginDp: Int? = null,       // "margin": distance from the screen edges in dp (default 12)
+    val imageAspect: Float? = null,  // "image_aspect": width / height of the image_only picture, so the window opens at its final size
 )
 
 private fun JSONObject.stringOrNull(key: String): String? =
@@ -94,6 +95,7 @@ fun JSONObject.toNotificationSpec(cid: String?): NotificationSpec {
         cid = cid,
         soundVolumePercent = soundPct,
         imageOnly = optBoolean("image_only", false) && imageUrl != null,
-        marginDp = optInt("margin", -1).takeIf { it in 0..200 }
+        marginDp = optInt("margin", -1).takeIf { it in 0..200 },
+        imageAspect = optDouble("image_aspect", Double.NaN).toFloat().takeIf { it in 0.1f..20f }
     )
 }

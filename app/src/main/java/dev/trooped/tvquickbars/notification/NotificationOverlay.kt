@@ -97,10 +97,11 @@ fun NotificationOverlay(
     transparency: Double?,
     onDismissRequest: () -> Unit,
     maxWidthDp: Int = 600,
-    imageOnly: Boolean = false
+    imageOnly: Boolean = false,
+    imageAspect: Float? = null
 ) {
     if (imageOnly && !imageUrl.isNullOrBlank()) {
-        ImageOnlyOverlay(imageUrl = imageUrl, maxWidthDp = maxWidthDp, onDismissRequest = onDismissRequest)
+        ImageOnlyOverlay(imageUrl = imageUrl, maxWidthDp = maxWidthDp, aspectHint = imageAspect, onDismissRequest = onDismissRequest)
         return
     }
     val bgColor = remember(bgColorHex, transparency) {
@@ -657,11 +658,13 @@ private fun Color.toHex(): String {
  * banner sits right at the window edge instead of being letterboxed in the middle of a tall box.
  */
 @Composable
-private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, onDismissRequest: () -> Unit) {
+private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, aspectHint: Float?, onDismissRequest: () -> Unit) {
     val ctx = LocalContext.current
     val (abs, isHaImg) = remember(imageUrl) { resolveAgainstHaBase(ctx, imageUrl) }
     val token = remember(isHaImg) { if (isHaImg) SecurePrefsManager.getHAToken(ctx) else null }
-    var aspect by remember(imageUrl) { mutableStateOf<Float?>(null) }
+    // The window must open at its final size: an overlay window that grows after it is shown can have its first
+    // buffer stretched (seen on a Shield as a smeared bar). Use the hint from HA, else assume a 5:1 banner.
+    var aspect by remember(imageUrl) { mutableStateOf(aspectHint ?: 5f) }
     var visible by remember(imageUrl) { mutableStateOf(false) }
     val alpha by animateFloatAsState(targetValue = if (visible) 1f else 0f, animationSpec = tween(220), label = "imgOnlyAlpha")
     val width = minOf(maxWidthDp, 520).dp
@@ -669,6 +672,7 @@ private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, onDismissRequest
         ImageRequest.Builder(ctx)
             .data(abs)
             .crossfade(false)
+            .allowHardware(false)   // software bitmap: draws reliably in a translucent overlay window
             .apply {
                 if (!token.isNullOrBlank() && isHaImg) {
                     addHeader("Authorization", "Bearer $token")
@@ -682,7 +686,7 @@ private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, onDismissRequest
         contentDescription = null,
         modifier = Modifier
             .width(width)
-            .then(if (aspect != null) Modifier.aspectRatio(aspect!!) else Modifier.height(1.dp))
+            .aspectRatio(aspect)
             .alpha(alpha)
             .onPreviewKeyEvent {
                 if (it.key == Key.Back && it.type == KeyEventType.KeyUp) { onDismissRequest(); true } else false
@@ -690,7 +694,7 @@ private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, onDismissRequest
         contentScale = ContentScale.Fit,
         onSuccess = { success ->
             val d = success.result.drawable
-            if (d.intrinsicWidth > 0 && d.intrinsicHeight > 0) aspect = d.intrinsicWidth.toFloat() / d.intrinsicHeight
+            if (aspectHint == null && d.intrinsicWidth > 0 && d.intrinsicHeight > 0) aspect = d.intrinsicWidth.toFloat() / d.intrinsicHeight
             visible = true
         },
         onError = { onDismissRequest() }

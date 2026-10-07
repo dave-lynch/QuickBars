@@ -175,7 +175,8 @@ class NotificationController(
                         transparency     = spec.transparency,
                         onDismissRequest = { hideNotification() },
                         maxWidthDp       = maxOverlayWidthDp(),
-                        imageOnly        = spec.imageOnly
+                        imageOnly        = spec.imageOnly,
+                        imageAspect      = spec.imageAspect
                     )
                 }
 
