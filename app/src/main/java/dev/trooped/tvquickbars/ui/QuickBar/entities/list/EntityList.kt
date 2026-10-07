@@ -181,7 +181,7 @@ fun EntityList(
                 modifier = modifier
                     .fillMaxWidth()
                     .heightIn(max = 800.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 items(

@@ -1,5 +1,12 @@
 package dev.trooped.tvquickbars.ui.QuickBar.entities.cards.normal
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -261,90 +268,100 @@ fun EntityCard(
         }
 
 
-    Card(
+    // DL style: glass rows on the dark purple panel (QuickBarOverlay), an icon tile that lights up with the TV-guide
+    // amber -> purple gradient when the entity is on, an iOS-style switch for toggles and a chevron for scripts /
+    // scenes / buttons. The selected row brightens and grows slightly instead of getting a hard white outline.
+    val isToggle = entity.id.substringBefore('.') in setOf("switch", "light", "input_boolean", "fan", "automation", "siren", "humidifier")
+    val isAction = isScript || isScene || isButton
+    val isOn = !isDisabledState && (entity.state == "on" || (isCamera && !entity.state.equals("off", true)))
+    val rowBg by animateColorAsState(
+        targetValue = when {
+            isFocused -> Color.White.copy(alpha = 0.22f)
+            isDisabledState -> Color.White.copy(alpha = 0.04f)
+            else -> Color.White.copy(alpha = 0.08f)
+        },
+        animationSpec = tween(160), label = "rowBg"
+    )
+    val rowScale by animateFloatAsState(if (isFocused) 1.035f else 1f, animationSpec = tween(160), label = "rowScale")
+    val textColor = if (isDisabledState) Color.White.copy(alpha = 0.4f) else Color.White
+    val tileBrush = if (isOn) Brush.verticalGradient(listOf(Color(0xFFF59E0B), Color(0xFF7C3AED)))
+                    else Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.14f), Color.White.copy(alpha = 0.10f)))
+    val displayName = remember(name) { prettyName(name) }
+
+    val stateText = when {
+        isSensor -> {
+            val attributes = entity.attributes
+            val deviceClass = attributes?.optString("device_class", "") ?: ""
+            if (deviceClass == "timestamp") {
+                formatTimestamp(entity.state)
+            } else {
+                val unit = attributes?.optString("unit_of_measurement", "") ?: ""
+                val formattedState = formatNumericSmart(entity.state, unit, attributes)
+                if (unit.isBlank()) formattedState else "$formattedState $unit"
+            }
+        }
+        isBinarySensor -> formatBinarySensorState(entity)
+        else -> ""
+    }
+
+    val shape = RoundedCornerShape(16.dp)
+    Box(
         modifier = modifier
+            .graphicsLayer { scaleX = rowScale; scaleY = rowScale }
+            .clip(shape)
+            .background(rowBg)
+            .border(1.dp, Color.White.copy(alpha = if (isFocused) 0.35f else 0.06f), shape)
             .combinedClickable(
                 enabled = isClickable,
                 interactionSource = interactionSource,
-                indication = ripple(bounded = true, color = contentColor),
-
+                indication = ripple(bounded = true, color = Color.White),
                 onClick = { handlePress(PressType.SINGLE) },
-                onLongClick = {
-                    /* keep long-press ripple / haptic if you wish */
-                    handlePress(PressType.LONG)
-                }
+                onLongClick = { handlePress(PressType.LONG) }
             )
-            .focusable(interactionSource = interactionSource),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(
-            2.dp,
-            if (isFocused) Color.White else Color.Transparent
-        ),
-        colors = CardDefaults.cardColors(
-            containerColor = animatedBackgroundColor,
-            contentColor = animatedContentColor
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            .focusable(interactionSource = interactionSource)
     ) {
-
-        val iconModifier = Modifier
-            .size(24.dp)
-            .scale(combinedIconScale) // Apply the animated scale
-            .alpha(if (isDisabledState) 0.4f else 1f)
-
-        val iconColorFilter = ColorFilter.tint(animatedContentColor)
-
-        val stateText = when {
-            isSensor -> {
-                val attributes = entity.attributes
-                val deviceClass = attributes?.optString("device_class", "") ?: ""
-
-                if (deviceClass == "timestamp") {
-                    formatTimestamp(entity.state)
-                } else {
-                    val unit = attributes?.optString("unit_of_measurement", "") ?: ""
-                    val formattedState = formatNumericSmart(entity.state, unit, attributes)
-                    if (unit.isBlank()) formattedState else "$formattedState $unit"
-                }
+        val tile = @Composable { size: Int ->
+            Box(
+                modifier = Modifier
+                    .size(size.dp)
+                    .clip(RoundedCornerShape((size * 0.3f).dp))
+                    .background(tileBrush),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = SafePainterResource(id = iconRes),
+                    contentDescription = name,
+                    modifier = Modifier
+                        .size((size * 0.55f).dp)
+                        .scale(combinedIconScale)
+                        .alpha(if (isDisabledState) 0.4f else 1f),
+                    colorFilter = ColorFilter.tint(Color.White)
+                )
             }
-
-            isBinarySensor -> formatBinarySensorState(entity)
-            else -> ""
         }
-
 
         if (isHorizontal) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(8.dp),
+                    .padding(10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Image(
-                    painter = SafePainterResource(id = iconRes),
-                    contentDescription = name,
-                    modifier = iconModifier,
-                    colorFilter = iconColorFilter
-                )
-
+                tile(34)
                 Text(
-                    text = name,
+                    text = displayName,
+                    color = textColor,
                     fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 6.dp)
                 )
-
                 if (stateText.isNotEmpty()) {
-                    // Force LTR layout direction for state text
                     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                        Text(
-                            text = stateText,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center
-                        )
+                        Text(text = stateText, color = textColor.copy(alpha = 0.7f), fontSize = 11.sp, textAlign = TextAlign.Center)
                     }
                 }
             }
@@ -352,41 +369,64 @@ fun EntityCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(12.dp),
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Image(
-                    painter = SafePainterResource(iconRes),
-                    contentDescription = name,
-                    modifier = iconModifier,
-                    colorFilter = iconColorFilter
-                )
-
+                tile(38)
                 Text(
-                    text = name,
-                    fontSize = 14.sp,
+                    text = displayName,
+                    color = textColor,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
                         .padding(start = 12.dp)
                         .weight(1f)
                 )
-
-                if (stateText.isNotEmpty()) {
-                    // Force LTR layout direction for state text
-                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                        Text(
-                            text = stateText,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(start = 8.dp)
-                        )
-                    }
+                when {
+                    stateText.isNotEmpty() ->
+                        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                            Text(text = stateText, color = textColor.copy(alpha = 0.75f), fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 8.dp))
+                        }
+                    isToggle && !isDisabledState -> MiniSwitch(isOn)
+                    isAction -> Text("\u203A", color = Color.White.copy(alpha = 0.45f), fontSize = 22.sp,
+                        modifier = Modifier.padding(start = 8.dp, end = 4.dp))
                 }
             }
         }
     }
 }
+
+/** iOS-style switch (display only - the row itself toggles the entity). */
+@Composable
+private fun MiniSwitch(on: Boolean) {
+    val knob by animateFloatAsState(if (on) 1f else 0f, animationSpec = tween(180), label = "knob")
+    val track by animateColorAsState(if (on) Color(0xFFF2A93B) else Color.White.copy(alpha = 0.22f), animationSpec = tween(180), label = "track")
+    Box(
+        modifier = Modifier
+            .padding(start = 8.dp)
+            .size(width = 40.dp, height = 24.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(track)
+            .padding(2.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(start = (16 * knob).dp)
+                .size(20.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Color.White)
+        )
+    }
+}
+
+/** 'GARAGE' -> 'Garage', 'BIRDSEYE' -> 'Birdseye'; short words such as 'PTZ' or 'TV' and mixed-case names are left alone. */
+private fun prettyName(n: String): String =
+    n.split(" ").joinToString(" ") { w ->
+        if (w.length > 3 && w.all { !it.isLetter() || it.isUpperCase() }) w.lowercase().replaceFirstChar { it.uppercase() } else w
+    }
 
 /**
  * Formats a numeric state string into a human-readable format based on precision rules.

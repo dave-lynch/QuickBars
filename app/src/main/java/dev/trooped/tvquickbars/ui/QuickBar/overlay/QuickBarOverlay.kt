@@ -214,13 +214,17 @@ fun QuickBarOverlay(
                             .heightIn(max = 300.dp)
                     }
                 ),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = backgroundColor),
+            // DL style: dark purple glass panel matching the TV-guide banner (bar background colour is not used)
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.Transparent),
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-            border = BorderStroke(0.dp, Color.Transparent)
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
         ) {
             Column(
-                modifier = Modifier.padding(contentPadding)
+                modifier = Modifier
+                    .background(androidx.compose.ui.graphics.Brush.verticalGradient(
+                        listOf(Color(0xF01C1828), Color(0xF03A1E54))))
+                    .padding(contentPadding)
             ) {
                 if (bar.showNameInOverlay || bar.showTimeOnQuickBar) {
                     Row(
@@ -234,8 +238,8 @@ fun QuickBarOverlay(
                         if (bar.showNameInOverlay) {
                             Text(
                                 text = bar.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = colorResource(id = R.color.md_theme_onSurface),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White,
                             )
                         }
 
@@ -246,7 +250,7 @@ fun QuickBarOverlay(
                             Text(
                                 text = timeText,
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = colorResource(id = R.color.md_theme_onSurface),
+                                color = Color.White.copy(alpha = 0.7f),
                                 textAlign = TextAlign.End
                             )
                         }
