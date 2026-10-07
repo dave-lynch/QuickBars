@@ -1,5 +1,7 @@
 package dev.trooped.tvquickbars.notification
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.spring
 import android.graphics.Bitmap
@@ -103,7 +105,8 @@ fun NotificationOverlay(
     imageAspect: Float? = null
 ) {
     if (imageOnly && !imageUrl.isNullOrBlank()) {
-        ImageOnlyOverlay(imageUrl = imageUrl, maxWidthDp = maxWidthDp, aspectHint = imageAspect, onDismissRequest = onDismissRequest)
+        ImageOnlyOverlay(imageUrl = imageUrl, maxWidthDp = maxWidthDp, aspectHint = imageAspect,
+            action = actions.firstOrNull(), onActionClick = onActionClick, onDismissRequest = onDismissRequest)
         return
     }
     val bgColor = remember(bgColorHex, transparency) {
@@ -660,7 +663,17 @@ private fun Color.toHex(): String {
  * banner sits right at the window edge instead of being letterboxed in the middle of a tall box.
  */
 @Composable
-private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, aspectHint: Float?, onDismissRequest: () -> Unit) {
+private fun ImageOnlyOverlay(
+    imageUrl: String,
+    maxWidthDp: Int,
+    aspectHint: Float?,
+    action: NotificationAction?,                 // OK on the remote fires it (the banner draws its own hint, e.g. "OK ▸ Watch")
+    onActionClick: (NotificationAction) -> Unit,
+    onDismissRequest: () -> Unit
+) {
+    val focus = remember { FocusRequester() }
+    // With an action the window is focusable (NotificationController), so take focus to receive OK / Back
+    LaunchedEffect(action) { if (action != null) runCatching { focus.requestFocus() } }
     val ctx = LocalContext.current
     val (abs, isHaImg) = remember(imageUrl) { resolveAgainstHaBase(ctx, imageUrl) }
     val token = remember(isHaImg) { if (isHaImg) SecurePrefsManager.getHAToken(ctx) else null }
@@ -696,8 +709,16 @@ private fun ImageOnlyOverlay(imageUrl: String, maxWidthDp: Int, aspectHint: Floa
             .width(width)
             .aspectRatio(aspect)
             .graphicsLayer { translationX = slide * size.width; this.alpha = alpha }
+            .then(if (action != null) Modifier.focusRequester(focus).focusable() else Modifier)
             .onPreviewKeyEvent {
-                if (it.key == Key.Back && it.type == KeyEventType.KeyUp) { onDismissRequest(); true } else false
+                when {
+                    it.key == Key.Back && it.type == KeyEventType.KeyUp -> { onDismissRequest(); true }
+                    action != null && (it.key == Key.DirectionCenter || it.key == Key.Enter || it.key == Key.NumPadEnter) -> {
+                        if (it.type == KeyEventType.KeyUp) onActionClick(action)
+                        true
+                    }
+                    else -> false
+                }
             },
         contentScale = ContentScale.Fit,
         onSuccess = { success ->
