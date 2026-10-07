@@ -53,6 +53,7 @@ android {
             initWith(getByName("release"))
             signingConfig = signingConfigs.getByName("debug")
             applicationIdSuffix = ".profileable"
+            versionNameSuffix = "-dl"
         }
     }
     compileOptions {
