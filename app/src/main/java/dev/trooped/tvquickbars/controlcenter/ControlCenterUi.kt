@@ -400,38 +400,64 @@ private fun NotificationsPage(
 // ============================================================ D4: catch-up page (full screen)
 @Composable
 private fun CatchupPage(spec: ControlCenterSpec, onBack: () -> Unit, onAction: (String) -> Unit) {
+    // Apple TV style: the focused programme fills the top (big title, channel and time, description, its artwork fading
+    // in from the right); the days are rows of posters underneath. Solid background so the live TV doesn't bleed through.
     var sel by remember { mutableStateOf(spec.catchup.firstOrNull()?.items?.firstOrNull()) }
+    var selDay by remember { mutableStateOf(spec.catchup.firstOrNull()?.title ?: "") }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
-    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xF00E0B16), Color(0xFA120E1C))))) {
-        Column(Modifier.fillMaxSize().padding(start = 48.dp, top = 28.dp, end = 0.dp, bottom = 16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(Amber))
-                Text("Catch up", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+    Box(Modifier.fillMaxSize().background(Color(0xFF0D0A14))) {
+        // artwork of the focused programme, top right, fading into the background
+        sel?.let { s ->
+            Box(Modifier.align(Alignment.TopEnd).fillMaxWidth(.62f).height(300.dp)) {
+                key(s.id) { Net(s.backdrop ?: s.img, Modifier.fillMaxSize()) }
+                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Color(0xFF0D0A14), Color(0x990D0A14), Color(0x330D0A14)))))
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x000D0A14), Color(0x000D0A14), Color(0xFF0D0A14)))))
             }
-            Text("From your guide, reminders and followed shows", color = white(.55f), fontSize = 10.sp, modifier = Modifier.padding(start = 26.dp, bottom = 10.dp))
-            if (spec.catchup.isEmpty()) Text("Nothing to catch up on", color = white(.5f), fontSize = 13.sp)
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                itemsIndexed(spec.catchup) { si, sec ->
-                    Column {
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(sec.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            Text("  ${sec.items.size} programmes", color = white(.5f), fontSize = 9.sp, modifier = Modifier.padding(bottom = 2.dp))
-                        }
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(13.dp), contentPadding = PaddingValues(top = 8.dp, bottom = 4.dp, end = 48.dp)) {
-                            itemsIndexed(sec.items, key = { _, it -> it.id }) { ii, it ->
-                                PosterCard(it, requester = if (si == 0 && ii == 0) first else null,
-                                    onFocus = { sel = it }, onOk = { onAction("catchup_play:${it.id}") })
-                            }
-                        }
+        }
+        Column(Modifier.fillMaxSize().padding(start = 52.dp, top = 26.dp, bottom = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
+                Text("Catch up", color = white(.85f), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("   Following · Reminded · Liked first", color = white(.5f), fontSize = 11.sp)
+            }
+            // focused programme
+            Column(Modifier.height(196.dp).widthIn(max = 520.dp).padding(top = 12.dp)) {
+                sel?.let { s ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        s.badge?.let { b -> Text(b, color = Ink, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(end = 8.dp).clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 9.dp, vertical = 2.dp)) }
+                        Text(listOf(selDay, s.days).filter { it.isNotBlank() }.joinToString(" · "), color = white(.7f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text(s.title, color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 6.dp))
+                    Text(s.detail.ifBlank { s.sub }, color = white(.85f), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+                    if (s.summary.isNotBlank()) Text(s.summary, color = white(.72f), fontSize = 13.sp, lineHeight = 18.sp, maxLines = 3,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
+                    Spacer(Modifier.weight(1f))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("OK  Watch", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 14.dp, vertical = 5.dp))
+                        Text("   ◀ ▶ programmes · ▲ ▼ days · Back", color = white(.5f), fontSize = 11.sp)
                     }
                 }
             }
-            sel?.let { s ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
-                    Text(s.detail.ifBlank { s.title }, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.widthIn(max = 280.dp))
-                    Text("   OK  Watch", color = Ink, fontSize = 10.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(start = 12.dp).clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 10.dp, vertical = 4.dp))
+            if (spec.catchup.isEmpty()) Text("Nothing to catch up on yet", color = white(.6f), fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
+            LazyColumn(Modifier.weight(1f).padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                itemsIndexed(spec.catchup) { si, sec ->
+                    Column {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(sec.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Text("  ${sec.items.size} programmes", color = white(.55f), fontSize = 12.sp, modifier = Modifier.padding(bottom = 2.dp))
+                        }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(top = 10.dp, bottom = 6.dp, start = 4.dp, end = 52.dp)) {
+                            itemsIndexed(sec.items, key = { _, it -> it.id }) { ii, it ->
+                                PosterCard(it, requester = if (si == 0 && ii == 0) first else null,
+                                    onFocus = { sel = it; selDay = sec.title }, onOk = { onAction("catchup_play:${it.id}") })
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -441,32 +467,28 @@ private fun CatchupPage(spec: ControlCenterSpec, onBack: () -> Unit, onAction: (
 @Composable
 private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: () -> Unit, onOk: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val s by animateFloatAsState(if (focused) 1.06f else 1f, tween(140), label = "pc")
-    Column(Modifier.width(88.dp)) {
+    val s by animateFloatAsState(if (focused) 1.08f else 1f, tween(140), label = "pc")
+    Column(Modifier.width(112.dp)) {
         Box(
-            Modifier.size(88.dp, 126.dp).graphicsLayer { scaleX = s; scaleY = s }.clip(RoundedCornerShape(10.dp))
-                .background(Brush.verticalGradient(listOf(Color(0xFF105C46), Color(0xFF0C283C))))
-                .border(if (focused) 3.dp else 0.dp, if (focused) Amber else Color.Transparent, RoundedCornerShape(10.dp))
+            Modifier.size(112.dp, 160.dp).graphicsLayer { scaleX = s; scaleY = s }.clip(RoundedCornerShape(12.dp))
+                .background(Brush.verticalGradient(listOf(Color(0xFF2A2145), Color(0xFF15111F))))
+                .border(if (focused) 3.dp else 0.dp, if (focused) Amber else Color.Transparent, RoundedCornerShape(12.dp))
                 .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
                 .onFocusChanged { f -> focused = f.isFocused; if (f.isFocused) onFocus() }
                 .onKeyEvent { e -> if (e.isOk()) { if (e.type == KeyEventType.KeyUp) onOk(); true } else false }
                 .focusable()
         ) {
             if (it.img != null) Net(it.img, Modifier.fillMaxSize())
-            else Text(it.title, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(8.dp))
+            else Text(it.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(10.dp))
             it.badge?.let { b ->
-                Text(b, color = Amber, fontSize = 7.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(5.dp).clip(RoundedCornerShape(50)).background(Color(0xDD140F1E)).padding(horizontal = 5.dp, vertical = 1.dp))
-            }
-            it.prog?.let { p ->
-                Box(Modifier.align(Alignment.BottomCenter).padding(6.dp).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(white(.35f))) {
-                    Box(Modifier.fillMaxHeight().fillMaxWidth(p.coerceIn(0f, 1f)).background(Amber))
-                }
+                Text(b, color = Amber, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(6.dp).clip(RoundedCornerShape(50)).background(Color(0xE6140F1E)).padding(horizontal = 6.dp, vertical = 1.dp))
             }
         }
-        Text(it.title, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
-        Text(it.sub, color = white(.55f), fontSize = 8.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (it.days.isNotBlank()) Text(it.days, color = white(.38f), fontSize = 7.sp, maxLines = 1)
+        // only the focused card spells everything out; the rest stay quiet so the row is easy to scan
+        Text(it.title, color = if (focused) Color.White else white(.8f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
+        Text(it.sub, color = white(.55f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

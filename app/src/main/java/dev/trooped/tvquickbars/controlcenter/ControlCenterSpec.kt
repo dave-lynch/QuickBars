@@ -31,6 +31,7 @@ data class CcTile(val id: String, val title: String, val sub: String, val icon: 
 data class CcCatchupItem(
     val id: String, val title: String, val sub: String, val img: String?, val badge: String?,
     val prog: Float?, val days: String, val detail: String,
+    val summary: String = "", val backdrop: String? = null,
 )
 data class CcSection(val title: String, val items: List<CcCatchupItem>)
 
@@ -74,6 +75,7 @@ data class ControlCenterSpec(
                         id = it.optString("id"), title = it.optString("title"), sub = it.optString("sub"), img = it.str("img"),
                         badge = it.str("badge"), prog = if (it.has("prog") && !it.isNull("prog")) it.optDouble("prog").toFloat() else null,
                         days = it.optString("days"), detail = it.optString("detail"),
+                        summary = it.optString("summary"), backdrop = it.str("backdrop"),
                     )
                 })
             },
