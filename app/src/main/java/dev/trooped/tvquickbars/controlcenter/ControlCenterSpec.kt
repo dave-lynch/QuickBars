@@ -26,7 +26,8 @@ data class CcNotification(
     val title: String, val body: String, val thumbs: List<String>, val open: String,
 )
 data class CcCamera(val entity: String, val name: String, val image: String)
-data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean)
+/** bri: light brightness 0-100 (-1 when not a dimmable light), for the hold-OK brightness slider */
+data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1)
 data class CcCatchupItem(
     val id: String, val title: String, val sub: String, val img: String?, val badge: String?,
     val prog: Float?, val days: String, val detail: String,
@@ -65,7 +66,7 @@ data class ControlCenterSpec(
             },
             cameraStatus = o.optString("camera_status"),
             tiles = o.optJSONArray("tiles").objects().map {
-                CcTile(it.optString("id"), it.optString("title"), it.optString("sub"), it.optString("icon", "lightbulb"), it.optBoolean("on"))
+                CcTile(it.optString("id"), it.optString("title"), it.optString("sub"), it.optString("icon", "lightbulb"), it.optBoolean("on"), it.optInt("bri", -1))
             },
             catchup = o.optJSONArray("catchup").objects().map { s ->
                 CcSection(s.optString("section"), s.optJSONArray("items").objects().map {

@@ -97,10 +97,12 @@ private fun Focusable(
     focusedBg: Color = white(.22f),
     requester: FocusRequester? = null,
     onKey: ((KeyEvent) -> Boolean)? = null,
+    onLong: (() -> Unit)? = null,
     onOk: () -> Unit = {},
     content: @Composable BoxScope.(focused: Boolean) -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    var longFired by remember { mutableStateOf(false) }
     val s by animateFloatAsState(if (focused) 1.04f else 1f, spring(stiffness = 500f), label = "ccScale")
     Box(
         modifier
@@ -112,7 +114,15 @@ private fun Focusable(
             .onFocusChanged { focused = it.isFocused }
             .onKeyEvent { e ->
                 if (onKey?.invoke(e) == true) true
-                else if (e.isOk()) { if (e.type == KeyEventType.KeyUp) onOk(); true } else false
+                else if (e.isOk()) {
+                    // Holding OK repeats the key-down: the first repeat runs onLong (if any) and the release is then
+                    // swallowed; a short press runs onOk on release as before.
+                    if (e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 0) longFired = false
+                    if (e.type == KeyEventType.KeyDown && onLong != null && !longFired && e.nativeKeyEvent.repeatCount >= 1) {
+                        longFired = true; onLong()
+                    } else if (e.type == KeyEventType.KeyUp) { if (longFired) longFired = false else onOk() }
+                    true
+                } else false
             }
             .focusable(),
     ) { content(focused) }
@@ -176,11 +186,36 @@ fun ControlCenterRoot(
     }
     fun dismiss(n: CcNotification) { dismissed += n.id; onAction("notif_dismiss:${n.id}") }
 
+    // Brightness slider (hold OK on a light tile): ▲▼ in 10% steps, sent to HA after a short pause; OK / Back close it
+    var dim by remember { mutableStateOf<CcTile?>(null) }
+    var dimPct by remember { mutableIntStateOf(0) }
+    var dimSent by remember { mutableIntStateOf(-1) }
+    var dimHeld by remember { mutableStateOf(false) }   // the OK that opened it is still held: ignore its release
+    fun openDim(t: CcTile) { dim = t; dimPct = if (t.bri >= 0) t.bri else if (t.on) 100 else 0; dimSent = dimPct; dimHeld = true }
+    LaunchedEffect(dimPct, dim) {
+        val t = dim ?: return@LaunchedEffect
+        if (dimPct == dimSent) return@LaunchedEffect
+        delay(300); dimSent = dimPct; onAction("bright:${t.id}:$dimPct")
+    }
+
     Box(
         Modifier.fillMaxSize()
             .background(Brush.horizontalGradient(listOf(Color.Transparent, Color(0x99000000))))
             .onPreviewKeyEvent { e ->
-                if (e.key == Key.Back || e.key == Key.Escape) { if (e.type == KeyEventType.KeyUp) back(); true } else false
+                if (dim != null) {
+                    when {
+                        e.type != KeyEventType.KeyDown && !(e.isOk() || e.key == Key.Back || e.key == Key.Escape) -> {}
+                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> dimPct = (dimPct + 10).coerceAtMost(100)
+                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> dimPct = (dimPct - 10).coerceAtLeast(0)
+                        e.isOk() && dimHeld -> { if (e.type == KeyEventType.KeyUp) dimHeld = false }
+                        (e.isOk() || e.key == Key.Back || e.key == Key.Escape) && e.type == KeyEventType.KeyUp -> {
+                            // close; send the last value at once if the pause hadn't sent it yet
+                            if (dimPct != dimSent) { dimSent = dimPct; onAction("bright:${dim!!.id}:$dimPct") }
+                            dim = null
+                        }
+                    }
+                    true
+                } else if (e.key == Key.Back || e.key == Key.Escape) { if (e.type == KeyEventType.KeyUp) back(); true } else false
             }
     ) {
         when (page) {
@@ -193,7 +228,9 @@ fun ControlCenterRoot(
             ) {
                 if (page == "notifications") NotificationsPage(notes, onBack = { back() }, onOpen = ::openNote, onDismiss = ::dismiss,
                     onClearAll = { notes.forEach { dismiss(it) }; page = "home" })
-                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote, onAction = onAction, onCamera = { onCamera(it); onClose() })
+                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote, onAction = onAction, onCamera = { onCamera(it); onClose() },
+                    onDim = { openDim(it) })
+                dim?.let { Dimmer(it.title, dimPct) }
             }
         }
     }
@@ -204,6 +241,7 @@ fun ControlCenterRoot(
 private fun HomePage(
     spec: ControlCenterSpec, notes: List<CcNotification>,
     onOpenStack: () -> Unit, onOpen: (CcNotification) -> Unit, onAction: (String) -> Unit, onCamera: (String) -> Unit,
+    onDim: (CcTile) -> Unit = {},
 ) {
     var clock by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { while (true) { clock = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()); delay(10_000) } }
@@ -274,6 +312,7 @@ private fun HomePage(
                 Focusable(Modifier.weight(1f).height(72.dp), RoundedCornerShape(14.dp),
                     bg = if (on) white(.92f) else white(.10f), focusedBg = if (on) Color.White else white(.22f),
                     requester = if (notes.isEmpty() && spec.cameras.isEmpty() && t == spec.tiles.first()) first else null,
+                    onLong = if (t.id.startsWith("light.")) ({ onDim(t) }) else null,
                     onOk = { on = !on; onAction("tile:${t.id}") }) {
                     Column(Modifier.fillMaxSize().padding(8.dp)) {
                         Image(painterResource(ccIcon(t.icon)), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(if (on) Color(0xFFF59E0B) else Color.White))
@@ -285,7 +324,7 @@ private fun HomePage(
             } }
         }
         Spacer(Modifier.weight(1f))
-        Text("OK to open · Back to close", color = white(.35f), fontSize = 8.sp)
+        Text("OK to open · hold OK on a light for brightness · Back to close", color = white(.35f), fontSize = 8.sp, maxLines = 1)
     }
 }
 
@@ -413,5 +452,25 @@ private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: (
         Text(it.title, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
         Text(it.sub, color = white(.55f), fontSize = 8.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (it.days.isNotBlank()) Text(it.days, color = white(.38f), fontSize = 7.sp, maxLines = 1)
+    }
+}
+
+// ============================================================ brightness slider (hold OK on a light tile)
+@Composable
+private fun Dimmer(title: String, pct: Int) {
+    Box(Modifier.fillMaxSize().background(Color(0xE6140F22)), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(if (pct == 0) "Off" else "$pct%", color = Amber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
+            // tall pill like the iOS Control Centre brightness slider; the lit part grows from the bottom
+            Box(Modifier.width(78.dp).height(190.dp).clip(RoundedCornerShape(24.dp)).background(white(.14f)),
+                contentAlignment = Alignment.BottomCenter) {
+                Box(Modifier.fillMaxWidth().fillMaxHeight(pct / 100f).background(Color(0xFFF5F2FA)))
+                Image(painterResource(ccIcon("lightbulb")), null, Modifier.padding(bottom = 14.dp).size(24.dp),
+                    colorFilter = ColorFilter.tint(if (pct >= 15) Color(0xFFF59E0B) else Color.White))
+            }
+            Text("▲ ▼ adjust · OK done", color = white(.5f), fontSize = 9.sp, modifier = Modifier.padding(top = 12.dp))
+        }
     }
 }
