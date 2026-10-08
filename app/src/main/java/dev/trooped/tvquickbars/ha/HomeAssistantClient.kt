@@ -93,6 +93,7 @@ class HomeAssistantClient(
                 StateChangedHandler(),
                 QuickBarsOpenHandler(),
                 QuickBarsNotifyHandler(),
+                dev.trooped.tvquickbars.ha.ws.handlers.QuickBarsControlCenterHandler(),
             )
         )
     }
@@ -655,6 +656,13 @@ class HomeAssistantClient(
             put("event_type", "quickbars.notify")
         }
         webSocket.send(quickbarsNotifySub.toString())
+
+        val controlCenterSub = JSONObject().apply {
+            put("id", nextCommandId++)
+            put("type", "subscribe_events")
+            put("event_type", "quickbars.control_center")
+        }
+        webSocket.send(controlCenterSub.toString())
     }
 
     /**

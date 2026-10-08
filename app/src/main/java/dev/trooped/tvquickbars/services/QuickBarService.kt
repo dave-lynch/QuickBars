@@ -313,6 +313,7 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
 
     // ───── Notification/notification overlay (image + sound) ───────────────────────────────────────────
     private lateinit var notifications: NotificationController
+    private var controlCenter: dev.trooped.tvquickbars.controlcenter.ControlCenterController? = null
 
     /** App-scoped preferences for persisting the failsafe state across restarts. */
     private val prefs: SharedPreferences by lazy {
@@ -383,6 +384,12 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
 
         const val ACTION_SHOW_CAMERA_PIP = "dev.trooped.tvquickbars.SHOW_CAMERA_PIP"
         const val EXTRA_CAMERA_SPEC = "CAMERA_SPEC"
+
+        fun handleControlCenterFromHa(data: org.json.JSONObject) {
+            serviceInstance?.runOnMain {
+                serviceInstance?.controlCenter?.handle(data)
+            } ?: Log.w("QuickBarService", "Service not running; control center ignored")
+        }
 
         fun handleNotificationFromHa(spec: NotificationSpec) {
             serviceInstance?.runOnMain {
@@ -462,6 +469,14 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
             serviceScope = serviceScope
         )
         notifications.onServiceConnected()
+
+        controlCenter = dev.trooped.tvquickbars.controlcenter.ControlCenterController(
+            context = this,
+            windowManager = windowManager,
+            runOnMain = ::runOnMain,
+            serviceScope = serviceScope,
+            openCamera = { entity -> handleCameraRequest(CameraRequest(cameraEntity = entity)) },
+        ).also { it.onServiceConnected() }
 
         camera = CameraPipController(
             context = this,
@@ -1839,6 +1854,7 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
 
         if (::notifications.isInitialized)
             try { notifications.onDestroy() } catch (_: Throwable) {}
+        try { controlCenter?.onDestroy() } catch (_: Throwable) {}
 
         if (quickBarLifecycleCreated) {
             quickBarLifecycleOwner.destroy()

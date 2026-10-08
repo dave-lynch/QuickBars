@@ -32,5 +32,8 @@ interface HomeAssistantListener {
 
     fun onNotifyReceived(spec: NotificationSpec) {}
 
+    /** quickbars.control_center event data (DL build) */
+    fun onControlCenter(data: JSONObject) {}
+
     fun onCameraRequest(req: CameraRequest) {}
 }

@@ -549,7 +549,7 @@ private fun HeaderIcon(
 }
 
 // Resolve /local, /api, etc. against HA base & tell if it’s HA-origin
-private fun resolveAgainstHaBase(ctx: android.content.Context, raw: String?): Pair<String?, Boolean> {
+internal fun resolveAgainstHaBase(ctx: android.content.Context, raw: String?): Pair<String?, Boolean> {
     if (raw.isNullOrBlank()) return null to false
     val s = raw.trim()
 

@@ -303,6 +303,11 @@ object BackgroundHaConnectionManager : HomeAssistantListener {
         QuickBarService.handleNotificationFromHa(spec)
     }
 
+    override fun onControlCenter(data: JSONObject) {
+        Log.i(TAG, "onControlCenter: ${data.optString("action", "open")} ${data.optString("page", "home")}")
+        QuickBarService.handleControlCenterFromHa(data)
+    }
+
     override fun onCameraRequest(req: CameraRequest) {
         // Bounce to the running service (main thread) like notify does
         QuickBarService.serviceInstance?.runOnMain {
