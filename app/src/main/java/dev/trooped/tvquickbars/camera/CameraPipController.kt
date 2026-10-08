@@ -54,6 +54,8 @@ class CameraPipController(
 
     // Overlay surface + auto-hide
     private var cameraPipOverlay: ComposeView? = null
+    /** A camera PiP is on screen (it is not focusable, so the service routes Back to [hide] while it shows). */
+    val isShowing: Boolean get() = cameraPipOverlay != null
     private var cameraHideHandler: Handler? = null
     private val cameraHideRunnable: Runnable = Runnable { hide() }
 

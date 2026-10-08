@@ -550,6 +550,13 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
             restartAutoHide(event)
         }
 
+        // Camera PiP on screen: Back closes it (the PiP window is not focusable so the app underneath keeps the remote,
+        // which means Back would otherwise go to TiviMate). Only the first Back is taken; with no PiP, Back passes through.
+        if (keyCode == KeyEvent.KEYCODE_BACK && this::camera.isInitialized && camera.isShowing) {
+            if (event.action == KeyEvent.ACTION_UP) camera.hide()
+            return true
+        }
+
         // Never intercept confirm key pair
         if (isConfirmKey(keyCodeRaw)) {
             return false
