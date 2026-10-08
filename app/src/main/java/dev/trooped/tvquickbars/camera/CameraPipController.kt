@@ -411,11 +411,11 @@ class CameraPipController(
         val (finalUrl, finalToken) = if (rtsp != null) {
             rtsp to null
         } else {
-            var baseUrl = SecurePrefsManager.getHAUrl(context)
+            // Same base as the WebSocket and notifications: a saved "http://host" with no port means HA's 8123,
+            // not port 80 (the old check only added 8123 when the scheme was missing too).
+            val baseUrl = dev.trooped.tvquickbars.notification.normalizedHaBase(context)?.toString()?.trimEnd('/')
+                ?: SecurePrefsManager.getHAUrl(context)?.trimEnd('/')
             val authToken = SecurePrefsManager.getHAToken(context)
-            if (baseUrl != null && !baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
-                baseUrl = if (baseUrl.contains(":")) "http://$baseUrl" else "http://$baseUrl:8123"
-            }
             "${baseUrl}/api/camera_proxy_stream/${entity.id}" to authToken
         }
 

@@ -401,7 +401,7 @@ private suspend fun fetchFirstMjpegFrameBytes(
 private fun defaultPortForScheme(scheme: String) =
     if (scheme.equals("https", true)) 443 else 80
 
-private fun normalizedHaBase(ctx: android.content.Context): HttpUrl? {
+internal fun normalizedHaBase(ctx: android.content.Context): HttpUrl? {
     var raw = dev.trooped.tvquickbars.persistence.SecurePrefsManager.getHAUrl(ctx)?.trim().orEmpty()
     if (raw.isEmpty()) return null
 
