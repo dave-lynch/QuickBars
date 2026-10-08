@@ -170,6 +170,7 @@ fun ControlCenterRoot(
     onKeepAlive: () -> Unit = {},
 ) {
     var page by remember(spec.page) { mutableStateOf(spec.page) }
+    var catchupFrom by remember(spec.page) { mutableStateOf("notifications") }   // where Back from catch-up returns to
     val dismissed = remember { mutableStateListOf<String>() }
     val notes = spec.notifications.filter { it.id !in dismissed }
     var shown by remember { mutableStateOf(false) }
@@ -181,11 +182,11 @@ fun ControlCenterRoot(
     var live by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(live) { while (live != null) { onKeepAlive(); delay(30_000) } }   // watching isn't "idle"
 
-    fun back() { page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else "notifications"; "notifications" -> "home"; else -> "close" }
+    fun back() { page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"; else -> "close" }
                  if (page == "close") onClose() }
     fun openNote(n: CcNotification) {
         when {
-            n.open.startsWith("page:") -> page = n.open.removePrefix("page:")
+            n.open.startsWith("page:") -> { catchupFrom = page; page = n.open.removePrefix("page:") }
             n.open.startsWith("camera:") -> live = n.open.removePrefix("camera:")
             else -> { onAction("notif_open:${n.id}"); onClose() }
         }
@@ -243,7 +244,8 @@ fun ControlCenterRoot(
             ) {
                 if (page == "notifications") NotificationsPage(notes, onBack = { back() }, onOpen = ::openNote, onDismiss = ::dismiss,
                     onClearAll = { notes.forEach { dismiss(it) }; page = "home" })
-                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote, onAction = onAction, onCamera = { live = if (live == it) null else it },
+                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote,
+                    onCatchup = { catchupFrom = "home"; page = "catchup" }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
                 dim?.let { Dimmer(it.title, dimPct) }
             }
@@ -256,7 +258,7 @@ fun ControlCenterRoot(
 private fun HomePage(
     spec: ControlCenterSpec, notes: List<CcNotification>,
     onOpenStack: () -> Unit, onOpen: (CcNotification) -> Unit, onAction: (String) -> Unit, onCamera: (String) -> Unit,
-    onDim: (CcTile) -> Unit = {},
+    onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {},
 ) {
     var clock by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { while (true) { clock = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()); delay(10_000) } }
@@ -337,6 +339,22 @@ private fun HomePage(
                     }
                 }
             } }
+        }
+        // TV: always here, so clearing notifications never loses the guide's catch-up picks
+        val cu = spec.catchup.flatMap { it.items }
+        if (cu.isNotEmpty()) Focusable(Modifier.fillMaxWidth().height(58.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
+            requester = if (notes.isEmpty() && spec.cameras.isEmpty() && spec.tiles.isEmpty()) first else null, onOk = onCatchup) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource(ccIcon("television_play")), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(Amber))
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text("TV · Catch up", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text("${cu.size} picks · " + cu.take(2).joinToString(", ") { it.title }, color = white(.6f), fontSize = 8.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    cu.take(3).forEach { c -> key(c.id) { Net(c.img, Modifier.size(26.dp, 38.dp).clip(RoundedCornerShape(4.dp))) } }
+                }
+            }
         }
         Spacer(Modifier.weight(1f))
         Text("OK to open · hold OK on a light for brightness · Back to close", color = white(.35f), fontSize = 8.sp, maxLines = 1)
