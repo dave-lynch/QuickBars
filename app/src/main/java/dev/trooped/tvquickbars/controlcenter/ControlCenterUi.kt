@@ -170,7 +170,8 @@ fun ControlCenterRoot(
     onKeepAlive: () -> Unit = {},
 ) {
     var page by remember(spec.page) { mutableStateOf(spec.page) }
-    var catchupFrom by remember(spec.page) { mutableStateOf("notifications") }   // where Back from catch-up returns to
+    var catchupFrom by remember(spec.page) { mutableStateOf("notifications") }
+    var openGroup by remember { mutableStateOf<String?>(null) }   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
     val dismissed = remember { mutableStateListOf<String>() }
     val notes = spec.notifications.filter { it.id !in dismissed }
     var shown by remember { mutableStateOf(false) }
@@ -182,7 +183,8 @@ fun ControlCenterRoot(
     var live by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(live) { while (live != null) { onKeepAlive(); delay(30_000) } }   // watching isn't "idle"
 
-    fun back() { page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"; else -> "close" }
+    fun back() { if (page == "home" && openGroup != null) { openGroup = null; return }
+                 page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"; else -> "close" }
                  if (page == "close") onClose() }
     fun openNote(n: CcNotification) {
         when {
@@ -245,7 +247,8 @@ fun ControlCenterRoot(
                 if (page == "notifications") NotificationsPage(notes, onBack = { back() }, onOpen = ::openNote, onDismiss = ::dismiss,
                     onClearAll = { notes.forEach { dismiss(it) }; page = "home" })
                 else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote,
-                    onCatchup = { catchupFrom = "home"; page = "catchup" }, onAction = onAction, onCamera = { live = if (live == it) null else it },
+                    onCatchup = { catchupFrom = "home"; page = "catchup" },
+                    openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
                 dim?.let { Dimmer(it.title, dimPct) }
             }
@@ -259,6 +262,7 @@ private fun HomePage(
     spec: ControlCenterSpec, notes: List<CcNotification>,
     onOpenStack: () -> Unit, onOpen: (CcNotification) -> Unit, onAction: (String) -> Unit, onCamera: (String) -> Unit,
     onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {},
+    openGroup: String? = null, onGroup: (String) -> Unit = {},
 ) {
     var clock by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { while (true) { clock = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()); delay(10_000) } }
@@ -269,7 +273,7 @@ private fun HomePage(
     LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
     // An update can remove the item that had focus (e.g. the last notification cleared on the phone): move focus to
     // the first item still on screen so the remote keeps working, without stealing it otherwise.
-    LaunchedEffect(notes.isEmpty(), spec.cameras.size, spec.tiles.size) { delay(120); if (!hasFocus) runCatching { first.requestFocus() } }
+    LaunchedEffect(notes.isEmpty(), spec.cameras.size, spec.tiles.size, openGroup) { delay(120); if (!hasFocus) runCatching { first.requestFocus() } }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp).onFocusChanged { hasFocus = it.hasFocus },
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -322,23 +326,24 @@ private fun HomePage(
         // quick tiles
         if (spec.tiles.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             spec.tiles.take(4).forEach { t -> key(t.id) {
-                // Flips at once on OK; the live update from HA then confirms it. If HA didn't follow within 4 s
-                // (device offline), fall back to the real state instead of showing a wrong tile.
-                var on by remember(t.on) { mutableStateOf(t.on) }
-                LaunchedEffect(on, t.on) { if (on != t.on) { delay(4_000); on = t.on } }
-                Focusable(Modifier.weight(1f).height(72.dp), RoundedCornerShape(14.dp),
-                    bg = if (on) white(.92f) else white(.10f), focusedBg = if (on) Color.White else white(.22f),
-                    requester = if (notes.isEmpty() && spec.cameras.isEmpty() && t == spec.tiles.first()) first else null,
-                    onLong = if (t.id.startsWith("light.")) ({ onDim(t) }) else null,
-                    onOk = { on = !on; onAction("tile:${t.id}") }) {
-                    Column(Modifier.fillMaxSize().padding(8.dp)) {
-                        Image(painterResource(ccIcon(t.icon)), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(if (on) Color(0xFFF59E0B) else Color.White))
-                        Spacer(Modifier.weight(1f))
-                        Text(t.title, color = if (on) Ink else Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (t.sub.isNotBlank()) Text(t.sub, color = if (on) Ink.copy(alpha = .6f) else white(.6f), fontSize = 8.sp, maxLines = 1)
-                    }
-                }
+                QuickTile(t, requester = if (notes.isEmpty() && spec.cameras.isEmpty() && t == spec.tiles.first()) first else null,
+                    open = openGroup == t.id,
+                    // a group opens its lights; a single light opens the brightness slider
+                    onLong = if (t.members.isNotEmpty()) ({ onGroup(t.id) }) else if (t.id.startsWith("light.")) ({ onDim(t) }) else null,
+                    onAction = onAction)
             } }
+        }
+        // the held group's own lights, each with OK to toggle and hold OK for brightness; Back closes the row
+        spec.tiles.firstOrNull { it.id == openGroup }?.let { g ->
+            val fr = remember(g.id) { FocusRequester() }
+            LaunchedEffect(g.id) { delay(60); runCatching { fr.requestFocus() } }
+            Text("${g.title} · each light", color = white(.75f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                g.members.take(4).forEach { m -> key(m.id) {
+                    QuickTile(m, requester = if (m == g.members.first()) fr else null, onLong = { onDim(m) }, onAction = onAction)
+                } }
+                repeat((4 - g.members.size).coerceAtLeast(0)) { Spacer(Modifier.weight(1f)) }
+            }
         }
         // TV: always here, so clearing notifications never loses the guide's catch-up picks
         val cu = spec.catchup.flatMap { it.items }
@@ -357,7 +362,33 @@ private fun HomePage(
             }
         }
         Spacer(Modifier.weight(1f))
-        Text("OK to open · hold OK on a light for brightness · Back to close", color = white(.35f), fontSize = 8.sp, maxLines = 1)
+        Text("OK to open · hold OK: brightness, or a group's lights · Back to close", color = white(.35f), fontSize = 8.sp, maxLines = 1)
+    }
+}
+
+/** A quick tile. Flips at once on OK; the live update from HA then confirms it. If HA didn't follow within 4 s (device
+ *  offline), it falls back to the real state instead of showing a wrong tile. `open`: a group whose lights are showing. */
+@Composable
+private fun RowScope.QuickTile(
+    t: CcTile, requester: FocusRequester?, open: Boolean = false, onLong: (() -> Unit)?, onAction: (String) -> Unit,
+) {
+    var on by remember(t.on) { mutableStateOf(t.on) }
+    LaunchedEffect(on, t.on) { if (on != t.on) { delay(4_000); on = t.on } }
+    Focusable(Modifier.weight(1f).height(72.dp).then(if (open) Modifier.border(2.dp, Amber, RoundedCornerShape(14.dp)) else Modifier),
+        RoundedCornerShape(14.dp),
+        bg = if (on) white(.92f) else white(.10f), focusedBg = if (on) Color.White else white(.22f),
+        requester = requester, onLong = onLong,
+        onOk = { on = !on; onAction("tile:${t.id}") }) {
+        Column(Modifier.fillMaxSize().padding(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource(ccIcon(t.icon)), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(if (on) Color(0xFFF59E0B) else Color.White))
+                Spacer(Modifier.weight(1f))
+                if (t.members.isNotEmpty()) Text(if (open) "▴" else "${t.members.size}", color = if (on) Ink.copy(alpha = .5f) else white(.5f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.weight(1f))
+            Text(t.title, color = if (on) Ink else Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (t.sub.isNotBlank()) Text(t.sub, color = if (on) Ink.copy(alpha = .6f) else white(.6f), fontSize = 8.sp, maxLines = 1)
+        }
     }
 }
 

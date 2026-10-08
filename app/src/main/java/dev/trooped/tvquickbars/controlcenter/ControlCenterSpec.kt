@@ -27,7 +27,8 @@ data class CcNotification(
 )
 data class CcCamera(val entity: String, val name: String, val image: String)
 /** bri: light brightness 0-100 (-1 when not a dimmable light), for the hold-OK brightness slider */
-data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1)
+data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1,
+                  val members: List<CcTile> = emptyList())   // a light group's own lights, shown when it is held
 data class CcCatchupItem(
     val id: String, val title: String, val sub: String, val img: String?, val badge: String?,
     val prog: Float?, val days: String, val detail: String,
@@ -66,9 +67,7 @@ data class ControlCenterSpec(
                 CcCamera(it.optString("entity"), it.optString("name"), it.optString("image"))
             },
             cameraStatus = o.optString("camera_status"),
-            tiles = o.optJSONArray("tiles").objects().map {
-                CcTile(it.optString("id"), it.optString("title"), it.optString("sub"), it.optString("icon", "lightbulb"), it.optBoolean("on"), it.optInt("bri", -1))
-            },
+            tiles = o.optJSONArray("tiles").objects().map { tile(it) },
             catchup = o.optJSONArray("catchup").objects().map { s ->
                 CcSection(s.optString("section"), s.optJSONArray("items").objects().map {
                     CcCatchupItem(
@@ -81,6 +80,9 @@ data class ControlCenterSpec(
             },
         )
 
+        private fun tile(it: JSONObject): CcTile =
+            CcTile(it.optString("id"), it.optString("title"), it.optString("sub"), it.optString("icon", "lightbulb"), it.optBoolean("on"),
+                it.optInt("bri", -1), it.optJSONArray("members").objects().map { m -> tile(m) })
         private fun JSONObject.str(k: String): String? = optString(k, "").takeIf { it.isNotBlank() && it != "null" }
         private fun JSONArray?.objects(): List<JSONObject> =
             if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
