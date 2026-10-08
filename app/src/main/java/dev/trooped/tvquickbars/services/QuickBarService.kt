@@ -475,7 +475,7 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
             windowManager = windowManager,
             runOnMain = ::runOnMain,
             serviceScope = serviceScope,
-            openCamera = { entity -> handleCameraRequest(CameraRequest(cameraEntity = entity)) },
+            openCamera = { entity -> handleCameraRequest(CameraRequest(cameraEntity = entity, position = "bottom_right")) },
         ).also { it.onServiceConnected() }
 
         camera = CameraPipController(

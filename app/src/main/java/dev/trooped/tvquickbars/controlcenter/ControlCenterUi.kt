@@ -167,6 +167,7 @@ fun ControlCenterRoot(
     onAction: (String) -> Unit,
     onCamera: (String) -> Unit,
     onClose: () -> Unit,
+    onKeepAlive: () -> Unit = {},
 ) {
     var page by remember(spec.page) { mutableStateOf(spec.page) }
     val dismissed = remember { mutableStateListOf<String>() }
@@ -175,12 +176,17 @@ fun ControlCenterRoot(
     LaunchedEffect(Unit) { shown = true }
     val slide by animateFloatAsState(if (shown) 0f else 1f, spring(dampingRatio = .85f, stiffness = 300f), label = "ccSlide")
 
+    // Live camera opened from the panel: shown large, sliding out from behind the panel's bottom-left edge. The first
+    // Back hands it to the corner PiP (bottom right) and closes the panel; Back again closes the PiP.
+    var live by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(live) { while (live != null) { onKeepAlive(); delay(30_000) } }   // watching isn't "idle"
+
     fun back() { page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else "notifications"; "notifications" -> "home"; else -> "close" }
                  if (page == "close") onClose() }
     fun openNote(n: CcNotification) {
         when {
             n.open.startsWith("page:") -> page = n.open.removePrefix("page:")
-            n.open.startsWith("camera:") -> { onCamera(n.open.removePrefix("camera:")); onClose() }
+            n.open.startsWith("camera:") -> live = n.open.removePrefix("camera:")
             else -> { onAction("notif_open:${n.id}"); onClose() }
         }
     }
@@ -202,7 +208,10 @@ fun ControlCenterRoot(
         Modifier.fillMaxSize()
             .background(Brush.horizontalGradient(listOf(Color.Transparent, Color(0x99000000))))
             .onPreviewKeyEvent { e ->
-                if (dim != null) {
+                if (dim == null && live != null && (e.key == Key.Back || e.key == Key.Escape)) {
+                    if (e.type == KeyEventType.KeyUp) { val cam = live!!; live = null; onCamera(cam); onClose() }
+                    true
+                } else if (dim != null) {
                     when {
                         e.type != KeyEventType.KeyDown && !(e.isOk() || e.key == Key.Back || e.key == Key.Escape) -> {}
                         e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> dimPct = (dimPct + 10).coerceAtMost(100)
@@ -218,6 +227,12 @@ fun ControlCenterRoot(
                 } else if (e.key == Key.Back || e.key == Key.Escape) { if (e.type == KeyEventType.KeyUp) back(); true } else false
             }
     ) {
+        // drawn before the panel so the panel overlaps its right edge: the camera looks like it extends out of it
+        live?.takeIf { page != "catchup" }?.let { e ->
+            val cam = spec.cameras.firstOrNull { it.entity == e }
+            LiveCamera(e, cam?.name ?: e.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() },
+                Modifier.align(Alignment.BottomEnd).padding(end = 328.dp, bottom = 34.dp))
+        }
         when (page) {
             "catchup" -> CatchupPage(spec, onBack = { back() }, onAction = onAction)
             else -> Box(
@@ -228,7 +243,7 @@ fun ControlCenterRoot(
             ) {
                 if (page == "notifications") NotificationsPage(notes, onBack = { back() }, onOpen = ::openNote, onDismiss = ::dismiss,
                     onClearAll = { notes.forEach { dismiss(it) }; page = "home" })
-                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote, onAction = onAction, onCamera = { onCamera(it); onClose() },
+                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
                 dim?.let { Dimmer(it.title, dimPct) }
             }
@@ -472,5 +487,38 @@ private fun Dimmer(title: String, pct: Int) {
             }
             Text("▲ ▼ adjust · OK done", color = white(.5f), fontSize = 9.sp, modifier = Modifier.padding(top = 12.dp))
         }
+    }
+}
+
+// ============================================================ live camera, extending out of the panel
+@Composable
+private fun LiveCamera(entity: String, name: String, modifier: Modifier) {
+    val ctx = LocalContext.current
+    val url = remember(entity) {
+        (dev.trooped.tvquickbars.notification.normalizedHaBase(ctx)?.toString()?.trimEnd('/')
+            ?: SecurePrefsManager.getHAUrl(ctx)?.trimEnd('/') ?: "") + "/api/camera_proxy_stream/" + entity
+    }
+    val token = remember { SecurePrefsManager.getHAToken(ctx) }
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val slide by animateFloatAsState(if (shown) 0f else 1f, spring(dampingRatio = .85f, stiffness = 320f), label = "liveCam")
+    Box(modifier.size(468.dp, 266.dp)
+        .graphicsLayer { translationX = slide * 120f; alpha = 1f - slide }
+        .clip(RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 6.dp, bottomEnd = 6.dp))
+        .background(PanelBrush).border(1.dp, white(.12f), RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 6.dp, bottomEnd = 6.dp))
+    ) {
+        key(entity) {
+            Box(Modifier.padding(start = 8.dp, top = 8.dp, bottom = 8.dp, end = 14.dp).clip(RoundedCornerShape(18.dp)).fillMaxSize().background(Color.Black)) {
+                dev.trooped.tvquickbars.camera.CameraMjpegView(url = url, authToken = token, modifier = Modifier.fillMaxSize())
+            }
+        }
+        Row(Modifier.padding(start = 18.dp, top = 16.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
+            .padding(horizontal = 9.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(Color(0xFFEF4444)))
+            Text("  $name · live", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        }
+        Text("Back: keep watching in the corner · OK on the tile: close", color = white(.85f), fontSize = 8.sp,
+            modifier = Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 14.dp)
+                .clip(RoundedCornerShape(50)).background(Color(0x99000000)).padding(horizontal = 8.dp, vertical = 2.dp))
     }
 }

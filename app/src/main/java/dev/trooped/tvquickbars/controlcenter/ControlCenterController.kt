@@ -90,6 +90,7 @@ class ControlCenterController(
                             onAction = { a -> bumpIdle(); send(a) },
                             onCamera = { e -> openCamera(e) },
                             onClose = { close() },
+                            onKeepAlive = { bumpIdle() },
                         )
                     }
                 }

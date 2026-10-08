@@ -132,7 +132,7 @@ class CameraPipController(
 
         val entityId = buildRtspEntityId(req.copy(rtspUrl = sanitized))
 
-        val defaultCorner = "TOP_LEFT"
+        val defaultCorner = "BOTTOM_RIGHT"
         val defaultSize   = "MEDIUM"
         val corner        = mapCornerOverride(req.position) ?: defaultCorner
         val (wDp, hDp)    = chooseSize(req, defaultSize)
@@ -429,7 +429,8 @@ class CameraPipController(
 
 
         // 2) Defaults from per-camera saved state
-        val defaultCorner = (entity.lastKnownState["pip_corner"] as? String) ?: "TOP_LEFT"
+        // One place for every camera (bottom right, like the TV pop-ups) rather than each camera's own saved corner
+        val defaultCorner = "BOTTOM_RIGHT"
         val defaultSize   = (entity.lastKnownState["pip_size"]   as? String) ?: "MEDIUM"
         val defaultTitle  = (entity.lastKnownState["show_title"] as? Boolean) ?: true
         val defaultAuto   = ((entity.lastKnownState["auto_hide_timeout"] as? Number)?.toInt())
