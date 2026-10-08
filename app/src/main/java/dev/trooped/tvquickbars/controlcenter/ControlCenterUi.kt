@@ -23,6 +23,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
+import coil.request.SuccessResult
+import coil.imageLoader
+import androidx.core.graphics.drawable.toBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.runtime.key
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -127,8 +133,21 @@ private fun IconTile(icon: String, size: Dp, color: Long? = null, on: Boolean = 
 @Composable
 private fun Net(url: String?, modifier: Modifier, tick: Int = 0, crop: ContentScale = ContentScale.Crop) {
     val ctx = LocalContext.current
-    val req = remember(url, tick) { imageRequest(ctx, url, tick) }
-    if (req == null) Box(modifier.background(white(.08f))) else AsyncImage(req, null, modifier, contentScale = crop)
+    if (tick == 0) {
+        val req = remember(url) { imageRequest(ctx, url) }
+        if (req == null) Box(modifier.background(white(.08f))) else AsyncImage(req, null, modifier, contentScale = crop)
+        return
+    }
+    // Live frames (cameras): load each refresh in the background and swap only when it has arrived, so the tile
+    // keeps the last frame instead of going blank while loading (every 4 s, and when an update re-sends the list).
+    var frame by remember(url) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(url, tick) {
+        val req = imageRequest(ctx, url, tick) ?: return@LaunchedEffect
+        val r = ctx.imageLoader.execute(req)
+        (r as? SuccessResult)?.drawable?.let { d -> frame = d.toBitmap().asImageBitmap() }
+    }
+    val f = frame
+    if (f == null) Box(modifier.background(Color.Black)) else Image(f, null, modifier, contentScale = crop)
 }
 
 // ============================================================ root
@@ -191,9 +210,14 @@ private fun HomePage(
     var tick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(4_000); tick++ } }
     val first = remember { FocusRequester() }
+    var hasFocus by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
+    // An update can remove the item that had focus (e.g. the last notification cleared on the phone): move focus to
+    // the first item still on screen so the remote keeps working, without stealing it otherwise.
+    LaunchedEffect(notes.isEmpty(), spec.cameras.size, spec.tiles.size) { delay(120); if (!hasFocus) runCatching { first.requestFocus() } }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp).onFocusChanged { hasFocus = it.hasFocus },
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(clock, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
         if (spec.subtitle.isNotBlank()) Text(spec.subtitle, color = white(.65f), fontSize = 11.sp, modifier = Modifier.offset(y = (-8).dp))
         spec.now?.let { n ->
@@ -228,21 +252,26 @@ private fun HomePage(
         if (spec.cameras.isNotEmpty()) {
             Text(spec.cameraStatus.ifBlank { "Cameras" }, color = white(.75f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                spec.cameras.take(4).forEach { c ->
-                    Focusable(Modifier.weight(1f).height(56.dp), RoundedCornerShape(10.dp), bg = Color.Black, onOk = { onCamera(c.entity) }) { f ->
+                spec.cameras.take(4).forEach { c -> key(c.entity) {
+                    Focusable(Modifier.weight(1f).height(56.dp), RoundedCornerShape(10.dp), bg = Color.Black,
+                        requester = if (notes.isEmpty() && c == spec.cameras.first()) first else null, onOk = { onCamera(c.entity) }) { f ->
                         Net(c.image, Modifier.fillMaxSize(), tick)
                         Text(c.name, color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 5.dp, vertical = 2.dp))
                     }
-                }
+                } }
             }
         }
         // quick tiles
         if (spec.tiles.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            spec.tiles.take(4).forEach { t ->
-                var on by remember(t.id, t.on) { mutableStateOf(t.on) }
+            spec.tiles.take(4).forEach { t -> key(t.id) {
+                // Flips at once on OK; the live update from HA then confirms it. If HA didn't follow within 4 s
+                // (device offline), fall back to the real state instead of showing a wrong tile.
+                var on by remember(t.on) { mutableStateOf(t.on) }
+                LaunchedEffect(on, t.on) { if (on != t.on) { delay(4_000); on = t.on } }
                 Focusable(Modifier.weight(1f).height(72.dp), RoundedCornerShape(14.dp),
                     bg = if (on) white(.92f) else white(.10f), focusedBg = if (on) Color.White else white(.22f),
+                    requester = if (notes.isEmpty() && spec.cameras.isEmpty() && t == spec.tiles.first()) first else null,
                     onOk = { on = !on; onAction("tile:${t.id}") }) {
                     Column(Modifier.fillMaxSize().padding(8.dp)) {
                         Image(painterResource(ccIcon(t.icon)), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(if (on) Color(0xFFF59E0B) else Color.White))
@@ -251,7 +280,7 @@ private fun HomePage(
                         if (t.sub.isNotBlank()) Text(t.sub, color = if (on) Ink.copy(alpha = .6f) else white(.6f), fontSize = 8.sp, maxLines = 1)
                     }
                 }
-            }
+            } }
         }
         Spacer(Modifier.weight(1f))
         Text("OK to open · Back to close", color = white(.35f), fontSize = 8.sp)
@@ -284,12 +313,15 @@ private fun NotificationsPage(
     onDismiss: (CcNotification) -> Unit, onClearAll: () -> Unit,
 ) {
     val first = remember { FocusRequester() }
+    var hasFocus by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp)) {
+    // A dismissed or remotely cleared notification takes its focus with it: put focus back on the top of the list
+    LaunchedEffect(notes.size) { delay(120); if (!hasFocus) runCatching { first.requestFocus() } }
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp).onFocusChanged { hasFocus = it.hasFocus }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
             Text("Notifications", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Focusable(Modifier.height(24.dp), RoundedCornerShape(12.dp), onOk = onClearAll) {
+            Focusable(Modifier.height(24.dp), RoundedCornerShape(12.dp), requester = if (notes.isEmpty()) first else null, onOk = onClearAll) {
                 Text("Clear all", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center).padding(horizontal = 10.dp))
             }
         }
