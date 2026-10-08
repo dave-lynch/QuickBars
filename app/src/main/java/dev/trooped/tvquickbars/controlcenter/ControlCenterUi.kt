@@ -251,15 +251,17 @@ private fun HomePage(
         // cameras strip
         if (spec.cameras.isNotEmpty()) {
             Text(spec.cameraStatus.ifBlank { "Cameras" }, color = white(.75f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                spec.cameras.take(4).forEach { c -> key(c.entity) {
-                    Focusable(Modifier.weight(1f).height(56.dp), RoundedCornerShape(10.dp), bg = Color.Black,
+            // Every camera as a sideways strip: about 3½ tiles show, so the next one peeks in; ◀ ▶ scroll it. Only the
+            // tiles on screen are composed, so only those refresh their frame every 4 s.
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                items(spec.cameras, key = { it.entity }) { c ->
+                    Focusable(Modifier.width(76.dp).height(56.dp), RoundedCornerShape(10.dp), bg = Color.Black,
                         requester = if (notes.isEmpty() && c == spec.cameras.first()) first else null, onOk = { onCamera(c.entity) }) { f ->
                         Net(c.image, Modifier.fillMaxSize(), tick)
                         Text(c.name, color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 5.dp, vertical = 2.dp))
                     }
-                } }
+                }
             }
         }
         // quick tiles
