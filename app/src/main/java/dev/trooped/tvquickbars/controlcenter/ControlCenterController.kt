@@ -48,7 +48,16 @@ class ControlCenterController(
         val s = try { ControlCenterSpec.parse(data) } catch (t: Throwable) { Log.e(TAG, "bad control center data", t); return@runOnMain }
         when (s.action) {
             "close" -> close()
-            "update" -> if (view != null) spec.value = s.copy(page = spec.value?.page ?: s.page)
+            // Update only what was sent (e.g. just "tiles" after a press), keep the page the user is on
+            "update" -> spec.value?.let { cur -> if (view != null) spec.value = cur.copy(
+                subtitle = if (data.has("subtitle")) s.subtitle else cur.subtitle,
+                now = if (data.has("now")) s.now else cur.now,
+                notifications = if (data.has("notifications")) s.notifications else cur.notifications,
+                cameras = if (data.has("cameras")) s.cameras else cur.cameras,
+                cameraStatus = if (data.has("camera_status")) s.cameraStatus else cur.cameraStatus,
+                tiles = if (data.has("tiles")) s.tiles else cur.tiles,
+                catchup = if (data.has("catchup")) s.catchup else cur.catchup,
+            ) }
             else -> { spec.value = s; if (view == null) show() else { close(); spec.value = s; show() } }
         }
         bumpIdle()

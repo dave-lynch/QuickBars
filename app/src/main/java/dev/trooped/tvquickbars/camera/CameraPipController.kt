@@ -396,6 +396,12 @@ class CameraPipController(
         }
 
         if (e == null) {
+            // Not saved in QuickBars: a camera entity ID from HA (the Control Center sends any camera.x) still works,
+            // streamed through HA's camera proxy with the default PiP settings.
+            if (!cameraEntityId.isNullOrBlank() && cameraEntityId.startsWith("camera.", ignoreCase = true)) {
+                return EntityItem(id = cameraEntityId, friendlyName = cameraEntityId.substringAfter('.')
+                    .replace('_', ' ').replaceFirstChar { it.uppercase() })
+            }
             Toast.makeText(context, "Camera not found: ${cameraEntityId ?: aliasOrName ?: "(none)"}", Toast.LENGTH_SHORT).show()
             return null
         }
