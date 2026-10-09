@@ -171,7 +171,8 @@ fun ControlCenterRoot(
 ) {
     var page by remember(spec.page) { mutableStateOf(spec.page) }
     var catchupFrom by remember(spec.page) { mutableStateOf("notifications") }
-    var openGroup by remember { mutableStateOf<String?>(null) }   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
+    var openGroup by remember { mutableStateOf<String?>(null) }
+    var tvMenu by remember { mutableStateOf<CcCatchupItem?>(null) }   // hold-OK menu open on the TV page   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
     val dismissed = remember { mutableStateListOf<String>() }
     val notes = spec.notifications.filter { it.id !in dismissed }
     var shown by remember { mutableStateOf(false) }
@@ -184,6 +185,7 @@ fun ControlCenterRoot(
     LaunchedEffect(live) { while (live != null) { onKeepAlive(); delay(30_000) } }   // watching isn't "idle"
 
     fun back() { if (page == "home" && openGroup != null) { openGroup = null; return }
+                 if (page == "catchup" && tvMenu != null) { tvMenu = null; return }
                  page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"; else -> "close" }
                  if (page == "close") onClose() }
     fun openNote(n: CcNotification) {
@@ -237,7 +239,7 @@ fun ControlCenterRoot(
                 Modifier.align(Alignment.BottomEnd).padding(end = 328.dp, bottom = 34.dp))
         }
         when (page) {
-            "catchup" -> CatchupPage(spec, onBack = { back() }, onAction = onAction)
+            "catchup" -> CatchupPage(spec, onAction = onAction, onClose = onClose, menu = tvMenu, onMenu = { tvMenu = it })
             else -> Box(
                 Modifier.align(Alignment.CenterEnd).padding(20.dp).width(320.dp).fillMaxHeight()
                     .graphicsLayer { translationX = slide * size.width * 1.1f }
@@ -352,8 +354,8 @@ private fun HomePage(
             Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("television_play")), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(Amber))
                 Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    Text("TV · Catch up", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text("${cu.size} picks · " + cu.take(2).joinToString(", ") { it.title }, color = white(.6f), fontSize = 8.sp,
+                    Text("TV", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(spec.catchup.take(3).joinToString(" · ") { it.title } + " · " + cu.take(2).joinToString(", ") { it.title }, color = white(.6f), fontSize = 8.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -446,15 +448,39 @@ private fun NotificationsPage(
     }
 }
 
-// ============================================================ D4: catch-up page (full screen)
+// ============================================================ D4: TV page (full screen)
+private fun okLabel(ok: String) = when {
+    ok.startsWith("watch_ch:") -> "Watch"
+    ok.startsWith("stream:") -> "Stream"
+    ok.startsWith("catchup_play:") -> "Catch up"
+    ok.startsWith("tvfb:remind:") -> "Remind me"
+    else -> ""
+}
+private val MENU_LABEL = mapOf("remind" to "Remind me", "follow" to "Follow", "like" to "Like", "dislike" to "Not interested")
+
 @Composable
-private fun CatchupPage(spec: ControlCenterSpec, onBack: () -> Unit, onAction: (String) -> Unit) {
-    // Apple TV style: the focused programme fills the top (big title, channel and time, description, its artwork fading
-    // in from the right); the days are rows of posters underneath. Solid background so the live TV doesn't bleed through.
+private fun CatchupPage(
+    spec: ControlCenterSpec, onAction: (String) -> Unit, onClose: () -> Unit,
+    menu: CcCatchupItem?, onMenu: (CcCatchupItem?) -> Unit,
+) {
+    // Apple TV style: the focused programme fills the top (big title, where and when, description, its artwork fading
+    // in from the right); rows of posters underneath: Up next, On now, Later tonight, New to stream, then the catch-up
+    // days. OK does the row's main thing (watch / stream / remind); hold OK for remind / follow / like / not interested.
     var sel by remember { mutableStateOf(spec.catchup.firstOrNull()?.items?.firstOrNull()) }
     var selDay by remember { mutableStateOf(spec.catchup.firstOrNull()?.title ?: "") }
+    var toast by remember { mutableStateOf("") }
+    LaunchedEffect(toast) { if (toast.isNotEmpty()) { delay(3_000); toast = "" } }
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
+    fun press(it: CcCatchupItem) {
+        val ok = it.ok
+        when {
+            ok.isBlank() -> toast = "Search for ${it.title} in the streaming app"
+            ok.startsWith("watch_ch:") || ok.startsWith("stream:") -> { onAction(ok); onClose() }
+            ok.startsWith("tvfb:remind:") -> { onAction(ok); toast = "Reminder set · ${it.title}" }
+            else -> onAction(ok)
+        }
+    }
     Box(Modifier.fillMaxSize().background(Color(0xFF0D0A14))) {
         // artwork of the focused programme, top right, fading into the background
         sel?.let { s ->
@@ -467,8 +493,9 @@ private fun CatchupPage(spec: ControlCenterSpec, onBack: () -> Unit, onAction: (
         Column(Modifier.fillMaxSize().padding(start = 52.dp, top = 26.dp, bottom = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
-                Text("Catch up", color = white(.85f), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text("   Following · Reminded · Liked first", color = white(.5f), fontSize = 11.sp)
+                Text("TV", color = white(.85f), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("   " + (toast.ifBlank { spec.catchup.take(4).joinToString(" · ") { it.title } }),
+                    color = if (toast.isNotBlank()) Amber else white(.5f), fontSize = 11.sp, fontWeight = if (toast.isNotBlank()) FontWeight.Bold else FontWeight.Normal)
             }
             // focused programme
             Column(Modifier.height(196.dp).widthIn(max = 520.dp).padding(top = 12.dp)) {
@@ -482,40 +509,84 @@ private fun CatchupPage(spec: ControlCenterSpec, onBack: () -> Unit, onAction: (
                         modifier = Modifier.padding(top = 6.dp))
                     Text(s.detail.ifBlank { s.sub }, color = white(.85f), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+                    s.prog?.let { p ->
+                        Box(Modifier.padding(top = 6.dp).width(220.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(white(.18f))) {
+                            Box(Modifier.fillMaxHeight().fillMaxWidth(p.coerceIn(0f, 1f)).background(Amber))
+                        }
+                    }
                     if (s.summary.isNotBlank()) Text(s.summary, color = white(.72f), fontSize = 13.sp, lineHeight = 18.sp, maxLines = 3,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
                     Spacer(Modifier.weight(1f))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("OK  Watch", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 14.dp, vertical = 5.dp))
-                        Text("   ◀ ▶ programmes · ▲ ▼ days · Back", color = white(.5f), fontSize = 11.sp)
+                        val l = okLabel(s.ok)
+                        if (l.isNotEmpty()) Text("OK  $l", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(end = 10.dp).clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 14.dp, vertical = 5.dp))
+                        Text((if (s.menu.isNotEmpty()) "hold OK for more · " else "") + "◀ ▶ programmes · ▲ ▼ rows · Back", color = white(.5f), fontSize = 11.sp)
                     }
                 }
             }
-            if (spec.catchup.isEmpty()) Text("Nothing to catch up on yet", color = white(.6f), fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
+            if (spec.catchup.isEmpty()) Text("Nothing here yet", color = white(.6f), fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
             LazyColumn(Modifier.weight(1f).padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 itemsIndexed(spec.catchup) { si, sec ->
                     Column {
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text(sec.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            Text("  ${sec.items.size} programmes", color = white(.55f), fontSize = 12.sp, modifier = Modifier.padding(bottom = 2.dp))
+                            Text("  ${sec.items.size}", color = white(.55f), fontSize = 12.sp, modifier = Modifier.padding(bottom = 2.dp))
                         }
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(top = 10.dp, bottom = 6.dp, start = 4.dp, end = 52.dp)) {
                             itemsIndexed(sec.items, key = { _, it -> it.id }) { ii, it ->
                                 PosterCard(it, requester = if (si == 0 && ii == 0) first else null,
-                                    onFocus = { sel = it; selDay = sec.title }, onOk = { onAction("catchup_play:${it.id}") })
+                                    onFocus = { sel = it; selDay = sec.title }, onOk = { press(it) },
+                                    onLong = if (it.menu.isNotEmpty() || it.ok.isNotBlank()) ({ onMenu(it) }) else null)
                             }
                         }
                     }
                 }
             }
         }
+        menu?.let { m ->
+            TvMenu(m, onPick = { act ->
+                onMenu(null)
+                if (act == "ok") press(m)
+                else {
+                    onAction("tvfb:$act:${m.key}")
+                    toast = when (act) { "remind" -> "Reminder set"; "follow" -> "Following"; "like" -> "Liked"; else -> "Hidden from now on" } + " · ${m.title}"
+                }
+            })
+        }
+    }
+}
+
+/** Hold-OK menu over the TV page: the row's main action, then remind / follow / like / not interested. */
+@Composable
+private fun TvMenu(m: CcCatchupItem, onPick: (String) -> Unit) {
+    val first = remember(m.id) { FocusRequester() }
+    var held by remember(m.id) { mutableStateOf(true) }        // the OK that opened it is still down: ignore its release
+    LaunchedEffect(m.id) { delay(60); runCatching { first.requestFocus() } }
+    val opts = (if (okLabel(m.ok).isNotEmpty()) listOf("ok" to okLabel(m.ok)) else emptyList()) +
+        m.menu.mapNotNull { a -> MENU_LABEL[a]?.let { a to it } }
+    Box(Modifier.fillMaxSize().background(Color(0xCC0D0A14)), contentAlignment = Alignment.Center) {
+        Column(Modifier.width(300.dp).clip(RoundedCornerShape(20.dp)).background(PanelBrush).border(1.dp, white(.12f), RoundedCornerShape(20.dp))
+            .padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(m.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(m.sub, color = white(.6f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 4.dp))
+            opts.forEachIndexed { i, (a, label) ->
+                Focusable(Modifier.fillMaxWidth().height(40.dp), RoundedCornerShape(12.dp), requester = if (i == 0) first else null,
+                    onKey = { e -> if (held && e.isOk()) { if (e.type == KeyEventType.KeyUp) held = false; true } else false },
+                    onOk = { onPick(a) }) {
+                    Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp))
+                }
+            }
+            Text("OK choose · Back", color = white(.4f), fontSize = 9.sp, modifier = Modifier.padding(top = 2.dp))
+        }
     }
 }
 
 @Composable
-private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: () -> Unit, onOk: () -> Unit) {
+private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: () -> Unit, onOk: () -> Unit, onLong: (() -> Unit)? = null) {
     var focused by remember { mutableStateOf(false) }
+    var longFired by remember { mutableStateOf(false) }
     val s by animateFloatAsState(if (focused) 1.08f else 1f, tween(140), label = "pc")
     Column(Modifier.width(112.dp)) {
         Box(
@@ -524,7 +595,17 @@ private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: (
                 .border(if (focused) 3.dp else 0.dp, if (focused) Amber else Color.Transparent, RoundedCornerShape(12.dp))
                 .then(if (requester != null) Modifier.focusRequester(requester) else Modifier)
                 .onFocusChanged { f -> focused = f.isFocused; if (f.isFocused) onFocus() }
-                .onKeyEvent { e -> if (e.isOk()) { if (e.type == KeyEventType.KeyUp) onOk(); true } else false }
+                .onKeyEvent { e ->
+                    if (!e.isOk()) false
+                    else {
+                        // hold OK (key repeat) opens the menu; a short press does the row's main action
+                        if (e.type == KeyEventType.KeyDown) {
+                            if (e.nativeKeyEvent.repeatCount == 0) longFired = false
+                            else if (!longFired && onLong != null) { longFired = true; onLong() }
+                        } else if (e.type == KeyEventType.KeyUp) { if (!longFired) onOk(); longFired = false }
+                        true
+                    }
+                }
                 .focusable()
         ) {
             if (it.img != null) Net(it.img, Modifier.fillMaxSize())
@@ -532,6 +613,11 @@ private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: (
             it.badge?.let { b ->
                 Text(b, color = Amber, fontSize = 9.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(6.dp).clip(RoundedCornerShape(50)).background(Color(0xE6140F1E)).padding(horizontal = 6.dp, vertical = 1.dp))
+            }
+            it.prog?.let { p ->
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(6.dp).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0x99000000))) {
+                    Box(Modifier.fillMaxHeight().fillMaxWidth(p.coerceIn(0f, 1f)).background(Amber))
+                }
             }
         }
         // only the focused card spells everything out; the rest stay quiet so the row is easy to scan

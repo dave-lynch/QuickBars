@@ -33,6 +33,8 @@ data class CcCatchupItem(
     val id: String, val title: String, val sub: String, val img: String?, val badge: String?,
     val prog: Float?, val days: String, val detail: String,
     val summary: String = "", val backdrop: String? = null,
+    /** what OK sends (watch_ch:<n>, stream:<type>:<imdb>, catchup_play:<id>, tvfb:remind:<key>); blank = nothing */
+    val ok: String = "", val key: String = "", val menu: List<String> = emptyList(),
 )
 data class CcSection(val title: String, val items: List<CcCatchupItem>)
 
@@ -75,6 +77,8 @@ data class ControlCenterSpec(
                         badge = it.str("badge"), prog = if (it.has("prog") && !it.isNull("prog")) it.optDouble("prog").toFloat() else null,
                         days = it.optString("days"), detail = it.optString("detail"),
                         summary = it.optString("summary"), backdrop = it.str("backdrop"),
+                        ok = it.optString("ok"), key = it.optString("key"),
+                        menu = it.optString("menu").split(",").map { m -> m.trim() }.filter { m -> m.isNotEmpty() },
                     )
                 })
             },
