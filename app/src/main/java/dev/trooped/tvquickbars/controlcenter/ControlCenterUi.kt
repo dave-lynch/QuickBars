@@ -572,7 +572,8 @@ private fun TvMenu(m: CcCatchupItem, onPick: (String) -> Unit) {
     var held by remember(m.id) { mutableStateOf(true) }        // the OK that opened it is still down: ignore its release
     LaunchedEffect(m.id) { delay(60); runCatching { first.requestFocus() } }
     val opts = (if (okLabel(m.ok).isNotEmpty()) listOf("ok" to okLabel(m.ok)) else emptyList()) +
-        m.menu.mapNotNull { a -> MENU_LABEL[a]?.let { a to it } }
+        m.menu.filterNot { it == "remind" && m.ok.startsWith("tvfb:remind:") }      // already the main action
+            .mapNotNull { a -> MENU_LABEL[a]?.let { a to it } }
     Box(Modifier.fillMaxSize().background(Color(0xCC0D0A14)), contentAlignment = Alignment.Center) {
         Column(Modifier.width(300.dp).clip(RoundedCornerShape(20.dp)).background(PanelBrush).border(1.dp, white(.12f), RoundedCornerShape(20.dp))
             .padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
