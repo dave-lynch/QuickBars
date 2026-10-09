@@ -165,7 +165,7 @@ private fun Net(url: String?, modifier: Modifier, tick: Int = 0, crop: ContentSc
 fun ControlCenterRoot(
     spec: ControlCenterSpec,
     onAction: (String) -> Unit,
-    onCamera: (String) -> Unit,
+    onCamera: (String, String?) -> Unit,   // entity, RTSP stream for the corner PiP
     onClose: () -> Unit,
     onKeepAlive: () -> Unit = {},
 ) {
@@ -231,7 +231,8 @@ fun ControlCenterRoot(
             .background(Brush.horizontalGradient(listOf(Color.Transparent, Color(0x99000000))))
             .onPreviewKeyEvent { e ->
                 if (dim == null && live != null && (e.key == Key.Back || e.key == Key.Escape)) {
-                    if (e.type == KeyEventType.KeyUp) { val cam = live!!; live = null; onCamera(cam); onClose() }
+                    if (e.type == KeyEventType.KeyUp) { val cam = live!!; live = null
+                        onCamera(cam, spec.cameras.firstOrNull { it.entity == cam }?.rtsp?.takeIf { it.isNotBlank() }); onClose() }
                     true
                 } else if (dim != null) {
                     when {
@@ -254,13 +255,13 @@ fun ControlCenterRoot(
         // drawn before the panel so the panel overlaps its right edge: the camera looks like it extends out of it
         live?.takeIf { page != "catchup" }?.let { e ->
             val cam = spec.cameras.firstOrNull { it.entity == e }
-            LiveCamera(e, cam?.name ?: e.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() },
-                Modifier.align(Alignment.BottomEnd).padding(end = 328.dp, bottom = 34.dp))
+            LiveCamera(e, cam?.name ?: e.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() }, cam?.rtspSub ?: "",
+                Modifier.align(Alignment.BottomEnd).padding(end = 358.dp, bottom = 34.dp))
         }
         when (page) {
             "catchup" -> CatchupPage(spec, onAction = onAction, onClose = onClose, menu = tvMenu, onMenu = { tvMenu = it })
             else -> Box(
-                Modifier.align(Alignment.CenterEnd).padding(20.dp).width(320.dp).fillMaxHeight()
+                Modifier.align(Alignment.CenterEnd).padding(20.dp).width(350.dp).fillMaxHeight()
                     .graphicsLayer { translationX = slide * size.width * 1.1f }
                     .clip(RoundedCornerShape(26.dp)).background(PanelBrush)
                     .border(1.dp, white(.12f), RoundedCornerShape(26.dp))
@@ -298,26 +299,26 @@ private fun HomePage(
 
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp).onFocusChanged { hasFocus = it.hasFocus },
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(clock, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-        if (spec.subtitle.isNotBlank()) Text(spec.subtitle, color = white(.65f), fontSize = 11.sp, modifier = Modifier.offset(y = (-8).dp))
+        Text(clock, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+        if (spec.subtitle.isNotBlank()) Text(spec.subtitle, color = white(.65f), fontSize = 14.sp, modifier = Modifier.offset(y = (-8).dp))
         spec.now?.let { n ->
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(white(.08f)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Net(n.image, Modifier.size(70.dp, 40.dp).clip(RoundedCornerShape(8.dp)))
                 Column(Modifier.padding(start = 10.dp)) {
-                    Text(n.label, color = Amber, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
-                    Text(n.title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (n.sub.isNotBlank()) Text(n.sub, color = white(.6f), fontSize = 9.sp, maxLines = 1)
+                    Text(n.label, color = Amber, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text(n.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (n.sub.isNotBlank()) Text(n.sub, color = white(.6f), fontSize = 12.sp, maxLines = 1)
                 }
             }
         }
         // notification stack (collapsed): top card + two edges peeking behind
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Notifications", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            if (notes.isNotEmpty()) Text("${notes.size} new", color = Ink, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+            Text("Notifications", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            if (notes.isNotEmpty()) Text("${notes.size} new", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 8.dp, vertical = 2.dp))
         }
         if (notes.isEmpty()) {
-            Text("You're all caught up", color = white(.5f), fontSize = 11.sp, modifier = Modifier.padding(vertical = 8.dp))
+            Text("You're all caught up", color = white(.5f), fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
         } else Box(Modifier.fillMaxWidth().height(if (notes.size > 1) 92.dp else 80.dp)) {
             if (notes.size > 2) Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 18.dp).fillMaxWidth().height(20.dp).clip(RoundedCornerShape(12.dp)).background(white(.06f)))
             if (notes.size > 1) Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 9.dp).offset(y = (-6).dp).fillMaxWidth().height(20.dp).clip(RoundedCornerShape(13.dp)).background(white(.10f)))
@@ -327,18 +328,18 @@ private fun HomePage(
             }
         }
         if (notes.size > 1) Text("+${notes.size - 1} more · " + notes.drop(1).take(3).joinToString(", ") { it.title.take(18) },
-            color = white(.45f), fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            color = white(.45f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         // cameras strip
         if (spec.cameras.isNotEmpty()) {
-            Text(spec.cameraStatus.ifBlank { "Cameras" }, color = white(.75f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            Text(spec.cameraStatus.ifBlank { "Cameras" }, color = white(.75f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             // Every camera as a sideways strip: about 3½ tiles show, so the next one peeks in; ◀ ▶ scroll it. Only the
             // tiles on screen are composed, so only those refresh their frame every 4 s.
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                 items(spec.cameras, key = { it.entity }) { c ->
-                    Focusable(Modifier.width(76.dp).height(56.dp), RoundedCornerShape(10.dp), bg = Color.Black,
+                    Focusable(Modifier.width(84.dp).height(60.dp), RoundedCornerShape(10.dp), bg = Color.Black,
                         requester = if (notes.isEmpty() && c == spec.cameras.first()) first else null, onOk = { onCamera(c.entity) }) { f ->
                         Net(c.image, Modifier.fillMaxSize(), tick)
-                        Text(c.name, color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                        Text(c.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 5.dp, vertical = 2.dp))
                     }
                 }
@@ -356,13 +357,13 @@ private fun HomePage(
         }
         // TV: always here, so clearing notifications never loses the guide's catch-up picks
         val cu = spec.catchup.flatMap { it.items }
-        if (cu.isNotEmpty()) Focusable(Modifier.fillMaxWidth().height(58.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
+        if (cu.isNotEmpty()) Focusable(Modifier.fillMaxWidth().height(68.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
             requester = if (notes.isEmpty() && spec.cameras.isEmpty() && spec.tiles.isEmpty()) first else null, onOk = onCatchup) {
             Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("television_play")), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(Amber))
                 Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    Text("TV", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Text(spec.catchup.take(3).joinToString(" · ") { it.title } + " · " + cu.take(2).joinToString(", ") { it.title }, color = white(.6f), fontSize = 8.sp,
+                    Text("TV", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(spec.catchup.take(3).joinToString(" · ") { it.title } + " · " + cu.take(2).joinToString(", ") { it.title }, color = white(.6f), fontSize = 11.sp,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -371,7 +372,7 @@ private fun HomePage(
             }
         }
         Spacer(Modifier.weight(1f))
-        Text("OK to open · hold OK: brightness, or a group's lights · Back to close", color = white(.35f), fontSize = 8.sp, maxLines = 1)
+        Text("OK open · hold OK brightness · Back close", color = white(.35f), fontSize = 11.sp, maxLines = 1)
     }
 }
 
@@ -383,7 +384,7 @@ private fun RowScope.QuickTile(
 ) {
     var on by remember(t.on) { mutableStateOf(t.on) }
     LaunchedEffect(on, t.on) { if (on != t.on) { delay(4_000); on = t.on } }
-    Focusable(Modifier.weight(1f).height(72.dp).then(if (open) Modifier.border(2.dp, Amber, RoundedCornerShape(14.dp)) else Modifier),
+    Focusable(Modifier.weight(1f).height(84.dp).then(if (open) Modifier.border(2.dp, Amber, RoundedCornerShape(14.dp)) else Modifier),
         RoundedCornerShape(14.dp),
         bg = if (on) white(.92f) else white(.10f), focusedBg = if (on) Color.White else white(.22f),
         requester = requester, onLong = onLong,
@@ -392,11 +393,11 @@ private fun RowScope.QuickTile(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon(t.icon)), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(if (on) Color(0xFFF59E0B) else Color.White))
                 Spacer(Modifier.weight(1f))
-                if (t.members.isNotEmpty()) Text(if (open) "▴" else "${t.members.size}", color = if (on) Ink.copy(alpha = .5f) else white(.5f), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                if (t.members.isNotEmpty()) Text(if (open) "▴" else "${t.members.size}", color = if (on) Ink.copy(alpha = .5f) else white(.5f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.weight(1f))
-            Text(t.title, color = if (on) Ink else Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (t.sub.isNotBlank()) Text(t.sub, color = if (on) Ink.copy(alpha = .6f) else white(.6f), fontSize = 8.sp, maxLines = 1)
+            Text(t.title, color = if (on) Ink else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (t.sub.isNotBlank()) Text(t.sub, color = if (on) Ink.copy(alpha = .6f) else white(.6f), fontSize = 11.sp, maxLines = 1)
         }
     }
 }
@@ -407,12 +408,12 @@ private fun NoteBody(n: CcNotification, compact: Boolean) {
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconTile(n.icon, 18.dp, n.color)
-                Text(n.app, color = white(.6f), fontSize = 8.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 6.dp).weight(1f), maxLines = 1)
-                Text(n.whenText, color = white(.5f), fontSize = 8.sp)
+                Text(n.app, color = white(.6f), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 6.dp).weight(1f), maxLines = 1)
+                Text(n.whenText, color = white(.5f), fontSize = 11.sp)
             }
             Text(n.title, color = Color.White, fontSize = if (compact) 12.sp else 13.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp))
-            if (n.body.isNotBlank()) Text(n.body, color = white(.65f), fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (n.body.isNotBlank()) Text(n.body, color = white(.65f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         if (n.thumbs.isNotEmpty()) Row(Modifier.padding(start = 6.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             n.thumbs.take(3).forEach { Net(it, Modifier.size(22.dp, 32.dp).clip(RoundedCornerShape(4.dp))) }
@@ -669,7 +670,7 @@ private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emp
 
 // ============================================================ live camera, extending out of the panel
 @Composable
-private fun LiveCamera(entity: String, name: String, modifier: Modifier) {
+private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Modifier) {
     val ctx = LocalContext.current
     val url = remember(entity) {
         (dev.trooped.tvquickbars.notification.normalizedHaBase(ctx)?.toString()?.trimEnd('/')
@@ -686,7 +687,14 @@ private fun LiveCamera(entity: String, name: String, modifier: Modifier) {
     ) {
         key(entity) {
             Box(Modifier.padding(start = 8.dp, top = 8.dp, bottom = 8.dp, end = 14.dp).clip(RoundedCornerShape(18.dp)).fillMaxSize().background(Color.Black)) {
-                dev.trooped.tvquickbars.camera.CameraMjpegView(url = url, authToken = token, modifier = Modifier.fillMaxSize())
+                // Real video (H.264 from Frigate's restream, hardware decoded) when the camera has one; HA's MJPEG proxy
+                // (a few stills a second) if not, or if the stream fails.
+                var rtspFailed by remember(entity) { mutableStateOf(false) }
+                if (rtsp.isNotBlank() && !rtspFailed)
+                    dev.trooped.tvquickbars.camera.CameraRtspView(url = rtsp,
+                        config = dev.trooped.tvquickbars.camera.RtspProfile(latency = dev.trooped.tvquickbars.camera.StreamLatency.LOW_LATENCY, muteAudio = true),
+                        modifier = Modifier.fillMaxSize(), onError = { rtspFailed = true })
+                else dev.trooped.tvquickbars.camera.CameraMjpegView(url = url, authToken = token, modifier = Modifier.fillMaxSize())
             }
         }
         Row(Modifier.padding(start = 18.dp, top = 16.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))

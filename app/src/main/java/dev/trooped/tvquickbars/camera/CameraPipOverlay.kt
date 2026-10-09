@@ -171,10 +171,11 @@ data class RtspProfile(
 // ───────────────────────── RTSP player (Media3) ─────────────────────────
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun CameraRtspView(
+internal fun CameraRtspView(
     url: String,
     config: RtspProfile,
     modifier: Modifier = Modifier,
+    onError: (() -> Unit)? = null,   // set: the caller falls back instead of showing the debug screen
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -250,7 +251,7 @@ private fun CameraRtspView(
                         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                             val cause = error.cause?.message ?: "Unknown"
                             lastError = "Code: ${error.errorCodeName}\n$cause"
-                            showDebug = true
+                            if (onError != null) onError() else showDebug = true
                         }
                     })
 

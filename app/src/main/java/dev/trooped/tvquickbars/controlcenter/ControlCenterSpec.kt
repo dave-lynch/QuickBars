@@ -25,7 +25,8 @@ data class CcNotification(
     val id: String, val app: String, val icon: String, val color: Long, val whenText: String,
     val title: String, val body: String, val thumbs: List<String>, val open: String,
 )
-data class CcCamera(val entity: String, val name: String, val image: String)
+/** rtsp / rtspSub: Frigate's go2rtc restreams (full / lighter sub stream) for smooth video; blank = HA's MJPEG proxy */
+data class CcCamera(val entity: String, val name: String, val image: String, val rtsp: String = "", val rtspSub: String = "")
 /** bri: light brightness 0-100 (-1 when not a dimmable light), for the hold-OK brightness slider */
 data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1,
                   val members: List<CcTile> = emptyList())   // a light group's own lights, shown when it is held
@@ -66,7 +67,7 @@ data class ControlCenterSpec(
                 )
             },
             cameras = o.optJSONArray("cameras").objects().map {
-                CcCamera(it.optString("entity"), it.optString("name"), it.optString("image"))
+                CcCamera(it.optString("entity"), it.optString("name"), it.optString("image"), it.optString("rtsp"), it.optString("rtsp_sub"))
             },
             cameraStatus = o.optString("camera_status"),
             tiles = o.optJSONArray("tiles").objects().map { tile(it) },

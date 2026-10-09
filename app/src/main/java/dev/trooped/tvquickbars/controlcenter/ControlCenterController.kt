@@ -32,7 +32,7 @@ class ControlCenterController(
     private val windowManager: WindowManager,
     private val runOnMain: (() -> Unit) -> Unit,
     private val serviceScope: CoroutineScope,
-    private val openCamera: (String) -> Unit,
+    private val openCamera: (String, String?) -> Unit,
 ) {
     private var view: ComposeView? = null
     private val lifecycleOwner = ComposeViewLifecycleOwner()
@@ -88,7 +88,7 @@ class ControlCenterController(
                         ControlCenterRoot(
                             spec = s,
                             onAction = { a -> bumpIdle(); send(a) },
-                            onCamera = { e -> openCamera(e) },
+                            onCamera = { e, rtsp -> openCamera(e, rtsp) },
                             onClose = { close() },
                             onKeepAlive = { bumpIdle() },
                         )
