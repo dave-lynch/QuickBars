@@ -198,11 +198,28 @@ fun ControlCenterRoot(
     fun dismiss(n: CcNotification) { dismissed += n.id; onAction("notif_dismiss:${n.id}") }
 
     // Brightness slider (hold OK on a light tile): ▲▼ in 10% steps, sent to HA after a short pause; OK / Back close it
+    // A light group opens with its parts listed under the slider (e.g. All · Spotlights · Standing lamp):
+    // ◀ ▶ picks which one the slider sets, ▲ ▼ sets it.
+    var dimTargets by remember { mutableStateOf<List<CcTile>>(emptyList()) }
+    var dimSel by remember { mutableIntStateOf(0) }
+    val dimPcts = remember { mutableStateMapOf<String, Int>() }
     var dim by remember { mutableStateOf<CcTile?>(null) }
     var dimPct by remember { mutableIntStateOf(0) }
     var dimSent by remember { mutableIntStateOf(-1) }
     var dimHeld by remember { mutableStateOf(false) }   // the OK that opened it is still held: ignore its release
-    fun openDim(t: CcTile) { dim = t; dimPct = if (t.bri >= 0) t.bri else if (t.on) 100 else 0; dimSent = dimPct; dimHeld = true }
+    fun pctOf(t: CcTile) = if (t.bri >= 0) t.bri else if (t.on) 100 else 0
+    fun openDim(t: CcTile) {
+        dimTargets = listOf(t) + t.members; dimSel = 0; dimPcts.clear(); dimTargets.forEach { dimPcts[it.id] = pctOf(it) }
+        dim = t; dimPct = pctOf(t); dimSent = dimPct; dimHeld = true
+    }
+    fun pickDim(i: Int) {
+        val d = dim ?: return
+        if (dimTargets.size < 2) return
+        if (dimPct != dimSent) onAction("bright:${d.id}:$dimPct")   // send the one being left at once
+        dimPcts[d.id] = dimPct
+        dimSel = i.coerceIn(0, dimTargets.size - 1); val t = dimTargets[dimSel]
+        dim = t; dimPct = dimPcts[t.id] ?: pctOf(t); dimSent = dimPct
+    }
     LaunchedEffect(dimPct, dim) {
         val t = dim ?: return@LaunchedEffect
         if (dimPct == dimSent) return@LaunchedEffect
@@ -221,6 +238,8 @@ fun ControlCenterRoot(
                         e.type != KeyEventType.KeyDown && !(e.isOk() || e.key == Key.Back || e.key == Key.Escape) -> {}
                         e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> dimPct = (dimPct + 10).coerceAtMost(100)
                         e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> dimPct = (dimPct - 10).coerceAtLeast(0)
+                        e.key == Key.DirectionLeft && e.type == KeyEventType.KeyDown -> pickDim(dimSel - 1)
+                        e.key == Key.DirectionRight && e.type == KeyEventType.KeyDown -> pickDim(dimSel + 1)
                         e.isOk() && dimHeld -> { if (e.type == KeyEventType.KeyUp) dimHeld = false }
                         (e.isOk() || e.key == Key.Back || e.key == Key.Escape) && e.type == KeyEventType.KeyUp -> {
                             // close; send the last value at once if the pause hadn't sent it yet
@@ -252,7 +271,7 @@ fun ControlCenterRoot(
                     onCatchup = { catchupFrom = "home"; page = "catchup" },
                     openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
-                dim?.let { Dimmer(it.title, dimPct) }
+                dim?.let { Dimmer(it.title, dimPct, dimTargets.map { t -> t.title to (if (t.id == it.id) dimPct else dimPcts[t.id] ?: 0) }, dimSel) }
             }
         }
     }
@@ -331,21 +350,9 @@ private fun HomePage(
                 QuickTile(t, requester = if (notes.isEmpty() && spec.cameras.isEmpty() && t == spec.tiles.first()) first else null,
                     open = openGroup == t.id,
                     // a group opens its lights; a single light opens the brightness slider
-                    onLong = if (t.members.isNotEmpty()) ({ onGroup(t.id) }) else if (t.id.startsWith("light.")) ({ onDim(t) }) else null,
+                    onLong = if (t.id.startsWith("light.")) ({ onDim(t) }) else null,
                     onAction = onAction)
             } }
-        }
-        // the held group's own lights, each with OK to toggle and hold OK for brightness; Back closes the row
-        spec.tiles.firstOrNull { it.id == openGroup }?.let { g ->
-            val fr = remember(g.id) { FocusRequester() }
-            LaunchedEffect(g.id) { delay(60); runCatching { fr.requestFocus() } }
-            Text("${g.title} · each light", color = white(.75f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                g.members.take(4).forEach { m -> key(m.id) {
-                    QuickTile(m, requester = if (m == g.members.first()) fr else null, onLong = { onDim(m) }, onAction = onAction)
-                } }
-                repeat((4 - g.members.size).coerceAtLeast(0)) { Spacer(Modifier.weight(1f)) }
-            }
         }
         // TV: always here, so clearing notifications never loses the guide's catch-up picks
         val cu = spec.catchup.flatMap { it.items }
@@ -629,20 +636,33 @@ private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: (
 
 // ============================================================ brightness slider (hold OK on a light tile)
 @Composable
-private fun Dimmer(title: String, pct: Int) {
+private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emptyList(), sel: Int = 0) {
     Box(Modifier.fillMaxSize().background(Color(0xE6140F22)), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Text(if (pct == 0) "Off" else "$pct%", color = Amber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
             // tall pill like the iOS Control Centre brightness slider; the lit part grows from the bottom
-            Box(Modifier.width(78.dp).height(190.dp).clip(RoundedCornerShape(24.dp)).background(white(.14f)),
+            Box(Modifier.width(78.dp).height(170.dp).clip(RoundedCornerShape(24.dp)).background(white(.14f)),
                 contentAlignment = Alignment.BottomCenter) {
                 Box(Modifier.fillMaxWidth().fillMaxHeight(pct / 100f).background(Color(0xFFF5F2FA)))
                 Image(painterResource(ccIcon("lightbulb")), null, Modifier.padding(bottom = 14.dp).size(24.dp),
                     colorFilter = ColorFilter.tint(if (pct >= 15) Color(0xFFF59E0B) else Color.White))
             }
-            Text("▲ ▼ adjust · OK done", color = white(.5f), fontSize = 9.sp, modifier = Modifier.padding(top = 12.dp))
+            // a group's parts under the slider: the highlighted one is what the slider sets
+            if (parts.size > 1) Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                parts.forEachIndexed { i, (name, p) ->
+                    Column(Modifier.width(86.dp).clip(RoundedCornerShape(12.dp)).background(if (i == sel) Color.White else white(.12f))
+                        .border(if (i == sel) 2.dp else 0.dp, if (i == sel) Amber else Color.Transparent, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 8.dp, vertical = 6.dp)) {
+                        Text(if (i == 0) "All" else name, color = if (i == sel) Ink else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(if (p == 0) "Off" else "$p%", color = if (i == sel) Ink.copy(alpha = .6f) else white(.6f), fontSize = 9.sp)
+                    }
+                }
+            }
+            Text((if (parts.size > 1) "◀ ▶ pick a light · " else "") + "▲ ▼ adjust · OK done", color = white(.5f), fontSize = 9.sp,
+                modifier = Modifier.padding(top = 12.dp))
         }
     }
 }
