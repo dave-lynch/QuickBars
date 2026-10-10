@@ -281,9 +281,9 @@ fun ControlCenterRoot(
             else -> dimPcts[t.id] ?: pctOf(t)
         }
     }
-    // Colour temperature (lights that have one): hold OK switches the slider between brightness and colour; ▲ ▼ then moves
-    // warmer / cooler in 7 steps over the light's own range - the Warm, Soft, Neutral and Cool presets (as on the room card)
-    // and one step between each pair. Sent as ct:<light>:<kelvin>.
+    // Colour temperature (lights that have one): a thin strip under the light chips with the room card's presets (Warm, Soft,
+    // Neutral, Cool over the light's own range). Hold OK switches ◀ ▶ from picking a light to stepping the presets; ▲ ▼ stays
+    // brightness. Sent as ct:<light>:<kelvin>.
     var ctMode by remember { mutableStateOf(false) }
     var ctK by remember { mutableIntStateOf(0) }
     var ctSent by remember { mutableIntStateOf(0) }
@@ -292,11 +292,10 @@ fun ControlCenterRoot(
     fun hasCt(t: CcTile?) = t != null && t.kmin > 0 && t.kmax > t.kmin
     fun ctOf(t: CcTile) = if (!hasCt(t)) 0 else (if (t.k > 0) t.k else (t.kmin + t.kmax) / 2).coerceIn(t.kmin, t.kmax)
     fun ctClamp(t: CcTile, k: Int) = if (!hasCt(t)) 0 else k.coerceIn(t.kmin, t.kmax)
-    fun ctStep(up: Boolean) {
+    fun ctStep(up: Boolean) {   // ◀ ▶ in colour mode: the next preset warmer / cooler
         val t = dim ?: return; if (!hasCt(t)) return
-        val span = (t.kmax - t.kmin) / 6.0
-        val p = ((ctK - t.kmin) / span).roundToInt().coerceIn(0, 6) + (if (up) 1 else -1)
-        ctK = (t.kmin + p.coerceIn(0, 6) * span).roundToInt()
+        val i = CT_PRESETS.indices.minByOrNull { kotlin.math.abs(ctPreset(it, t.kmin, t.kmax) - ctK) } ?: 0
+        ctK = ctClamp(t, ctPreset((i + if (up) 1 else -1).coerceIn(0, CT_PRESETS.size - 1), t.kmin, t.kmax))
     }
     fun shownCt(i: Int): Int {
         val t = dimTargets.getOrNull(i) ?: return 0
@@ -377,10 +376,10 @@ fun ControlCenterRoot(
                 } else if (dim != null) {
                     when {
                         e.type != KeyEventType.KeyDown && !(e.isOk() || e.key == Key.Back || e.key == Key.Escape) -> {}
-                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); if (ctMode) ctStep(true) else dimPct = (dimPct + dimStep).coerceAtMost(100) }
-                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); if (ctMode) ctStep(false) else dimPct = (dimPct - dimStep).coerceAtLeast(0) }
-                        e.key == Key.DirectionLeft && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); pickDim(dimSel - 1) }
-                        e.key == Key.DirectionRight && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); pickDim(dimSel + 1) }
+                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); dimPct = (dimPct + dimStep).coerceAtMost(100) }
+                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); dimPct = (dimPct - dimStep).coerceAtLeast(0) }
+                        e.key == Key.DirectionLeft && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); if (ctMode) ctStep(false) else pickDim(dimSel - 1) }
+                        e.key == Key.DirectionRight && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); if (ctMode) ctStep(true) else pickDim(dimSel + 1) }
                         e.isOk() && dimHeld -> { if (e.type == KeyEventType.KeyUp) dimHeld = false }
                         // hold OK: brightness <-> colour (a light with a colour temperature); the release then doesn't close
                         e.isOk() && e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 1 && hasCt(dim) -> {
@@ -1428,54 +1427,50 @@ private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emp
     Box(Modifier.fillMaxSize().background(Color(0xE6140F22)), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Text(if (ct != null && ct.on) "${ctName(ct.k, ct.kmin, ct.kmax)} · ${ct.k}K"
-                 else if (volume) "Volume $pct" else if (pct == 0) "Off" else "$pct%",
+            Text((if (volume) "Volume $pct" else if (pct == 0) "Off" else "$pct%") + (if (ct != null) " · ${ctName(ct.k, ct.kmin, ct.kmax)}" else ""),
                 color = Amber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                // tall pill like the iOS Control Centre brightness slider; the lit part grows from the bottom
-                val briOn = ct == null || !ct.on
-                Box(Modifier.width(78.dp).height(170.dp).clip(RoundedCornerShape(24.dp)).background(white(.14f))
-                    .border(if (ct != null && briOn) 2.dp else 0.dp, if (ct != null && briOn) Amber else Color.Transparent, RoundedCornerShape(24.dp)),
-                    contentAlignment = Alignment.BottomCenter) {
-                    Box(Modifier.fillMaxWidth().fillMaxHeight(pct / 100f).background(Color(0xFFF5F2FA)))
-                    Image(painterResource(ccIcon(if (volume) "speaker" else "lightbulb")), null, Modifier.padding(bottom = 14.dp).size(24.dp),
-                        colorFilter = ColorFilter.tint(if (pct >= 15) Color(0xFFF59E0B) else Color.White))
-                }
-                if (ct != null) {
-                    // colour pill: warm at the bottom, cool at the top, a bar where the light is; the presets alongside
-                    val f = ((ct.k - ct.kmin).toFloat() / (ct.kmax - ct.kmin)).coerceIn(0f, 1f)
-                    BoxWithConstraints(Modifier.width(78.dp).height(170.dp).clip(RoundedCornerShape(24.dp))
-                        .background(Brush.verticalGradient(listOf(kColor(ct.kmax), kColor((ct.kmin + ct.kmax) / 2), kColor(ct.kmin))))
-                        .border(if (ct.on) 2.dp else 0.dp, if (ct.on) Amber else Color.Transparent, RoundedCornerShape(24.dp))) {
-                        val y = (maxHeight - 6.dp) * (1f - f)
-                        Box(Modifier.offset(y = y).padding(horizontal = 10.dp).fillMaxWidth().height(6.dp)
-                            .clip(RoundedCornerShape(3.dp)).background(Ink.copy(alpha = .75f)))
-                    }
-                    Column(Modifier.height(170.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                        CT_PRESETS.indices.reversed().forEach { i ->
-                            val here = ctName(ct.k, ct.kmin, ct.kmax) == CT_PRESETS[i]
-                            Text(CT_PRESETS[i], color = if (here) Amber else white(.55f), fontSize = 11.sp,
-                                fontWeight = if (here) FontWeight.Bold else FontWeight.Normal)
-                        }
-                    }
-                }
+            // tall pill like the iOS Control Centre brightness slider; the lit part grows from the bottom
+            Box(Modifier.width(78.dp).height(170.dp).clip(RoundedCornerShape(24.dp)).background(white(.14f)),
+                contentAlignment = Alignment.BottomCenter) {
+                Box(Modifier.fillMaxWidth().fillMaxHeight(pct / 100f).background(Color(0xFFF5F2FA)))
+                Image(painterResource(ccIcon(if (volume) "speaker" else "lightbulb")), null, Modifier.padding(bottom = 14.dp).size(24.dp),
+                    colorFilter = ColorFilter.tint(if (pct >= 15) Color(0xFFF59E0B) else Color.White))
             }
             // a group's parts under the slider: the highlighted one is what the slider sets
             if (parts.size > 1) Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 parts.forEachIndexed { i, (name, p) ->
+                    val hi = i == sel && (ct == null || !ct.on)
                     Column(Modifier.width(86.dp).clip(RoundedCornerShape(12.dp)).background(if (i == sel) Color.White else white(.12f))
-                        .border(if (i == sel) 2.dp else 0.dp, if (i == sel) Amber else Color.Transparent, RoundedCornerShape(12.dp))
+                        .border(if (hi) 2.dp else 0.dp, if (hi) Amber else Color.Transparent, RoundedCornerShape(12.dp))
                         .padding(horizontal = 8.dp, vertical = 6.dp)) {
                         Text(if (i == 0) "All" else name, color = if (i == sel) Ink else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                         val k = ct?.parts?.getOrNull(i) ?: 0
-                        Text(if (ct != null && ct.on && k > 0) "${ctName(k, ct.kmin, ct.kmax)} ${k}K" else if (p == 0) "Off" else "$p%",
+                        Text((if (p == 0) "Off" else "$p%") + (if (ct != null && k > 0) " · ${ctName(k, ct.kmin, ct.kmax)}" else ""),
                             color = if (i == sel) Ink.copy(alpha = .6f) else white(.6f), fontSize = 9.sp, maxLines = 1)
                     }
                 }
             }
-            Text((if (parts.size > 1) "◀ ▶ pick a light · " else "") + "▲ ▼ adjust · " +
-                (if (ct != null) "hold OK ${if (ct.on) "brightness" else "colour"} · " else "") + "OK done",
+            // colour: a thin warm-to-cool strip with the presets under it; the dot is where the light is
+            if (ct != null) {
+                val w = if (parts.size > 1) (86 * parts.size + 6 * (parts.size - 1)).dp else 220.dp
+                val f = ((ct.k - ct.kmin).toFloat() / (ct.kmax - ct.kmin)).coerceIn(0f, 1f)
+                Box(Modifier.padding(top = 16.dp).width(w).height(16.dp), contentAlignment = Alignment.CenterStart) {
+                    Box(Modifier.fillMaxWidth().height(if (ct.on) 6.dp else 4.dp).clip(RoundedCornerShape(3.dp))
+                        .background(Brush.horizontalGradient(listOf(kColor(ct.kmin), kColor((ct.kmin + ct.kmax) / 2), kColor(ct.kmax)))))
+                    Box(Modifier.offset(x = (w - 16.dp) * f).size(16.dp).clip(RoundedCornerShape(8.dp)).background(kColor(ct.k))
+                        .border(2.dp, if (ct.on) Amber else Color.White, RoundedCornerShape(8.dp)))
+                }
+                Row(Modifier.width(w).padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                    val here = ctName(ct.k, ct.kmin, ct.kmax)
+                    CT_PRESETS.forEach { n ->
+                        Text(n, color = if (n == here) (if (ct.on) Amber else Color.White) else white(.45f), fontSize = 10.sp,
+                            fontWeight = if (n == here) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+            }
+            Text(if (ct != null && ct.on) "◀ ▶ warmer / cooler · ▲ ▼ brightness · hold OK " + (if (parts.size > 1) "pick a light" else "back") + " · OK done"
+                 else (if (parts.size > 1) "◀ ▶ pick a light · " else "") + "▲ ▼ adjust · " + (if (ct != null) "hold OK colour · " else "") + "OK done",
                 color = white(.5f), fontSize = 9.sp, modifier = Modifier.padding(top = 12.dp))
         }
     }
