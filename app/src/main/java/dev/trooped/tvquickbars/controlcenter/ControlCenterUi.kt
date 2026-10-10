@@ -62,6 +62,7 @@ import coil.request.ImageRequest
 import dev.trooped.tvquickbars.notification.resolveAgainstHaBase
 import dev.trooped.tvquickbars.persistence.SecurePrefsManager
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -261,16 +262,47 @@ fun ControlCenterRoot(
     var dimVerb by remember { mutableStateOf("bright") }
     val dimStep = if (dimVerb == "vol") 2 else 10
     fun pctOf(t: CcTile) = if (t.bri >= 0) t.bri else if (t.on) 100 else 0
+    // A light group's level is what Home Assistant reports for it: the average of its lights that are on (Spotlights count as
+    // two). So "All" follows its parts, and setting "All" sets every part to that level.
+    var dimTouched by remember { mutableLongStateOf(0L) }
+    fun groupAvg(): Int {
+        val parts = dimTargets.drop(1); if (parts.isEmpty()) return dimPct
+        val lit = parts.map { (if (it.id == dim?.id) dimPct else dimPcts[it.id] ?: 0) to it.n }.filter { it.first > 0 }
+        return if (lit.isEmpty()) 0 else (lit.sumOf { it.first * it.second }.toDouble() / lit.sumOf { it.second }).roundToInt()
+    }
+    fun shown(i: Int): Int {   // the level each chip shows, live while the slider moves
+        val t = dimTargets.getOrNull(i) ?: return 0
+        return when {
+            t.id == dim?.id -> dimPct
+            i == 0 && dimTargets.size > 1 -> groupAvg()
+            dimSel == 0 && dimTargets.size > 1 -> dimPct
+            else -> dimPcts[t.id] ?: pctOf(t)
+        }
+    }
     fun openDim(t: CcTile) {
         dimTargets = listOf(t) + t.members; dimSel = 0; dimPcts.clear(); dimTargets.forEach { dimPcts[it.id] = pctOf(it) }
         dimVerb = if (t.id.startsWith("media_player.")) "vol" else "bright"
-        dim = t; dimPct = pctOf(t); dimSent = dimPct; dimHeld = true
+        dim = t; dimPct = pctOf(t); dimSent = dimPct; dimHeld = true; dimTouched = 0L
+    }
+    // Fresh levels from Home Assistant (the panel refreshes after a change, or the lights moved some other way) replace the
+    // ones shown, unless a button was pressed in the last 2.5 s (then the slider's own value is newer).
+    LaunchedEffect(spec.tiles, spec.rooms) {
+        val d = dimTargets.firstOrNull() ?: return@LaunchedEffect
+        if (dimVerb != "bright" || System.currentTimeMillis() - dimTouched < 2500) return@LaunchedEffect
+        val fresh = (spec.tiles + spec.rooms.flatMap { it.devices }).firstOrNull { it.id == d.id } ?: return@LaunchedEffect
+        val parts = listOf(fresh) + fresh.members
+        if (parts.size != dimTargets.size) return@LaunchedEffect
+        dimTargets = parts; parts.forEach { dimPcts[it.id] = pctOf(it) }
+        val cur = parts[dimSel.coerceIn(0, parts.size - 1)]
+        dim = cur; dimPct = pctOf(cur); dimSent = dimPct
     }
     fun pickDim(i: Int) {
         val d = dim ?: return
         if (dimTargets.size < 2) return
         if (dimPct != dimSent) onAction("$dimVerb:${d.id}:$dimPct")   // send the one being left at once
+        if (dimSel == 0 && dimTargets.size > 1) dimTargets.drop(1).forEach { dimPcts[it.id] = dimPct }   // "All" set every part
         dimPcts[d.id] = dimPct
+        if (dimSel != 0 && dimTargets.size > 1) dimPcts[dimTargets[0].id] = groupAvg()
         dimSel = i.coerceIn(0, dimTargets.size - 1); val t = dimTargets[dimSel]
         dim = t; dimPct = dimPcts[t.id] ?: pctOf(t); dimSent = dimPct
     }
@@ -305,10 +337,10 @@ fun ControlCenterRoot(
                 } else if (dim != null) {
                     when {
                         e.type != KeyEventType.KeyDown && !(e.isOk() || e.key == Key.Back || e.key == Key.Escape) -> {}
-                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> dimPct = (dimPct + dimStep).coerceAtMost(100)
-                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> dimPct = (dimPct - dimStep).coerceAtLeast(0)
-                        e.key == Key.DirectionLeft && e.type == KeyEventType.KeyDown -> pickDim(dimSel - 1)
-                        e.key == Key.DirectionRight && e.type == KeyEventType.KeyDown -> pickDim(dimSel + 1)
+                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); dimPct = (dimPct + dimStep).coerceAtMost(100) }
+                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); dimPct = (dimPct - dimStep).coerceAtLeast(0) }
+                        e.key == Key.DirectionLeft && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); pickDim(dimSel - 1) }
+                        e.key == Key.DirectionRight && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); pickDim(dimSel + 1) }
                         e.isOk() && dimHeld -> { if (e.type == KeyEventType.KeyUp) dimHeld = false }
                         (e.isOk() || e.key == Key.Back || e.key == Key.Escape) && e.type == KeyEventType.KeyUp -> {
                             // close; send the last value at once if the pause hadn't sent it yet
@@ -341,7 +373,7 @@ fun ControlCenterRoot(
                 if (page == "room" && r != null) RoomPage(r, onAction = onAction, onDim = { openDim(it) },
                     onPage = { pg -> if (pg == "meals") { mealsFrom = "room"; mealTab = 0; onAction("meals:open") }; page = pg })
                 else RoomsPage(spec.rooms, onOpen = { room = it; page = "room" }, from = room)
-                dim?.let { Dimmer(it.title, dimPct, dimTargets.map { t -> t.title to (if (t.id == it.id) dimPct else dimPcts[t.id] ?: 0) }, dimSel, volume = dimVerb == "vol") }
+                dim?.let { Dimmer(it.title, dimPct, dimTargets.mapIndexed { i, t -> t.title to shown(i) }, dimSel, volume = dimVerb == "vol") }
             }
             else -> Box(
                 Modifier.align(Alignment.CenterEnd).padding(20.dp).width(350.dp).fillMaxHeight()
@@ -355,7 +387,7 @@ fun ControlCenterRoot(
                     onCatchup = { catchupFrom = "home"; page = "catchup" }, onRooms = { room = null; page = "rooms" },
                     openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
-                dim?.let { Dimmer(it.title, dimPct, dimTargets.map { t -> t.title to (if (t.id == it.id) dimPct else dimPcts[t.id] ?: 0) }, dimSel) }
+                dim?.let { Dimmer(it.title, dimPct, dimTargets.mapIndexed { i, t -> t.title to shown(i) }, dimSel) }
                 noteMenu?.let { n -> NoteMenu(n, onPick = { a -> noteMenu = null
                     when (a) {
                         "dismiss" -> dismiss(n)
