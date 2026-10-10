@@ -282,8 +282,8 @@ fun ControlCenterRoot(
         }
     }
     // Colour temperature (lights that have one): a thin strip under the light chips with the room card's presets (Warm, Soft,
-    // Neutral, Cool over the light's own range). Hold OK switches ◀ ▶ from picking a light to stepping the presets; ▲ ▼ stays
-    // brightness. Sent as ct:<light>:<kelvin>.
+    // Neutral, Cool over the light's own range). OK switches ◀ ▶ from picking a light to stepping the presets (Back closes);
+    // ▲ ▼ stays brightness. Sent as ct:<light>:<kelvin>.
     var ctMode by remember { mutableStateOf(false) }
     var ctK by remember { mutableIntStateOf(0) }
     var ctSent by remember { mutableIntStateOf(0) }
@@ -381,10 +381,8 @@ fun ControlCenterRoot(
                         e.key == Key.DirectionLeft && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); if (ctMode) ctStep(false) else pickDim(dimSel - 1) }
                         e.key == Key.DirectionRight && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); if (ctMode) ctStep(true) else pickDim(dimSel + 1) }
                         e.isOk() && dimHeld -> { if (e.type == KeyEventType.KeyUp) dimHeld = false }
-                        // hold OK: brightness <-> colour (a light with a colour temperature); the release then doesn't close
-                        e.isOk() && e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 1 && hasCt(dim) -> {
-                            okLong = true; ctMode = !ctMode; dimTouched = System.currentTimeMillis() }
-                        e.isOk() && e.type == KeyEventType.KeyUp && okLong -> okLong = false
+                        // OK on a light with a colour temperature: brightness <-> colour (Back closes); otherwise OK closes
+                        e.isOk() && e.type == KeyEventType.KeyUp && hasCt(dim) -> { ctMode = !ctMode; dimTouched = System.currentTimeMillis() }
                         (e.isOk() || e.key == Key.Back || e.key == Key.Escape) && e.type == KeyEventType.KeyUp -> {
                             // close; send the last value at once if the pause hadn't sent it yet
                             if (dimPct != dimSent) { dimSent = dimPct; onAction("$dimVerb:${dim!!.id}:$dimPct") }
@@ -1470,8 +1468,8 @@ private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emp
                     }
                 }
             }
-            Text(if (ct != null && ct.on) "◀ ▶ warmer / cooler · ▲ ▼ brightness · hold OK " + (if (parts.size > 1) "pick a light" else "back") + " · OK done"
-                 else (if (parts.size > 1) "◀ ▶ pick a light · " else "") + "▲ ▼ adjust · " + (if (ct != null) "hold OK colour · " else "") + "OK done",
+            Text(if (ct != null && ct.on) "◀ ▶ warmer / cooler · ▲ ▼ brightness · OK " + (if (parts.size > 1) "pick a light" else "back") + " · Back done"
+                 else (if (parts.size > 1) "◀ ▶ pick a light · " else "") + "▲ ▼ adjust · " + (if (ct != null) "OK colour · Back done" else "OK done"),
                 color = white(.5f), fontSize = 9.sp, modifier = Modifier.padding(top = 12.dp))
         }
     }
