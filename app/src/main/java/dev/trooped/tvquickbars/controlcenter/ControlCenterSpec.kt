@@ -36,6 +36,8 @@ data class CcCatchupItem(
     val summary: String = "", val backdrop: String? = null,
     /** what OK sends (watch_ch:<n>, stream:<type>:<imdb>, catchup_play:<id>, tvfb:remind:<key>); blank = nothing */
     val ok: String = "", val key: String = "", val menu: List<String> = emptyList(),
+    /** TV page filter: "mine" (followed / reminded / liked / watching), "pick" (recommended) or "" */
+    val tag: String = "",
 )
 data class CcSection(val title: String, val items: List<CcCatchupItem>)
 
@@ -80,6 +82,7 @@ data class ControlCenterSpec(
                         summary = it.optString("summary"), backdrop = it.str("backdrop"),
                         ok = it.optString("ok"), key = it.optString("key"),
                         menu = it.optString("menu").split(",").map { m -> m.trim() }.filter { m -> m.isNotEmpty() },
+                        tag = it.optString("tag"),
                     )
                 })
             },

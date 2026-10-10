@@ -466,6 +466,15 @@ private fun okLabel(ok: String) = when {
 }
 private val MENU_LABEL = mapOf("remind" to "Remind me", "follow" to "Follow", "like" to "Like", "dislike" to "Not interested")
 
+/** TV page filter, remembered while the app runs: "mine" = My shows, "foryou" = mine + recommended, "all" = everything. */
+private object TvView { var current = "mine" }
+private val TV_VIEWS = listOf("mine" to "My shows", "foryou" to "For you", "all" to "Everything")
+private fun tvKeep(view: String, it: CcCatchupItem) = when (view) {
+    "mine" -> it.tag == "mine"
+    "foryou" -> it.tag == "mine" || it.tag == "pick"
+    else -> true
+}
+
 @Composable
 private fun CatchupPage(
     spec: ControlCenterSpec, onAction: (String) -> Unit, onClose: () -> Unit,
@@ -474,12 +483,21 @@ private fun CatchupPage(
     // Apple TV style: the focused programme fills the top (big title, where and when, description, its artwork fading
     // in from the right); rows of posters underneath: Up next, On now, Later tonight, New to stream, then the catch-up
     // days. OK does the row's main thing (watch / stream / remind); hold OK for remind / follow / like / not interested.
-    var sel by remember { mutableStateOf(spec.catchup.firstOrNull()?.items?.firstOrNull()) }
-    var selDay by remember { mutableStateOf(spec.catchup.firstOrNull()?.title ?: "") }
+    // ▲ from the top row reaches the filter chips (My shows · For you · Everything); OK on one switches the rows.
+    var view by remember {
+        mutableStateOf(TvView.current.let { v -> if (v == "mine" && spec.catchup.none { s -> s.items.any { it.tag == "mine" } }) "foryou" else v })
+    }
+    val shown = remember(spec.catchup, view) {
+        spec.catchup.map { CcSection(it.title, it.items.filter { i -> tvKeep(view, i) }) }.filter { it.items.isNotEmpty() }
+    }
+    var sel by remember { mutableStateOf(shown.firstOrNull()?.items?.firstOrNull()) }
+    var selDay by remember { mutableStateOf(shown.firstOrNull()?.title ?: "") }
+    LaunchedEffect(view) { sel = shown.firstOrNull()?.items?.firstOrNull(); selDay = shown.firstOrNull()?.title ?: "" }
+    val chip = remember { FocusRequester() }
     var toast by remember { mutableStateOf("") }
     LaunchedEffect(toast) { if (toast.isNotEmpty()) { delay(3_000); toast = "" } }
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
+    LaunchedEffect(Unit) { delay(60); runCatching { if (shown.isEmpty()) chip.requestFocus() else first.requestFocus() } }
     fun press(it: CcCatchupItem) {
         val ok = it.ok
         when {
@@ -501,9 +519,18 @@ private fun CatchupPage(
         Column(Modifier.fillMaxSize().padding(start = 52.dp, top = 26.dp, bottom = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
-                Text("TV", color = white(.85f), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text("   " + (toast.ifBlank { spec.catchup.take(4).joinToString(" · ") { it.title } }),
-                    color = if (toast.isNotBlank()) Amber else white(.5f), fontSize = 11.sp, fontWeight = if (toast.isNotBlank()) FontWeight.Bold else FontWeight.Normal)
+                Text("TV", color = white(.85f), fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 6.dp))
+                TV_VIEWS.forEach { (v, label) ->
+                    val on = view == v
+                    Focusable(Modifier.padding(start = 8.dp).height(30.dp), RoundedCornerShape(50),
+                        bg = if (on) Amber else white(.10f), focusedBg = if (on) Amber else white(.30f),
+                        requester = if (v == TV_VIEWS[0].first) chip else null,
+                        onOk = { view = v; TvView.current = v }) {
+                        Text(label, color = if (on) Ink else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.align(Alignment.Center).padding(horizontal = 14.dp))
+                    }
+                }
+                Text("   " + toast, color = Amber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
             // focused programme
             Column(Modifier.height(196.dp).widthIn(max = 520.dp).padding(top = 12.dp)) {
@@ -529,13 +556,14 @@ private fun CatchupPage(
                         val l = okLabel(s.ok)
                         if (l.isNotEmpty()) Text("OK  $l", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(end = 10.dp).clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 14.dp, vertical = 5.dp))
-                        Text((if (s.menu.isNotEmpty()) "hold OK for more · " else "") + "◀ ▶ programmes · ▲ ▼ rows · Back", color = white(.5f), fontSize = 11.sp)
+                        Text((if (s.menu.isNotEmpty()) "hold OK for more · " else "") + "◀ ▶ programmes · ▲ ▼ rows · ▲ at top: filter · Back", color = white(.5f), fontSize = 11.sp)
                     }
                 }
             }
-            if (spec.catchup.isEmpty()) Text("Nothing here yet", color = white(.6f), fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
+            if (shown.isEmpty()) Text(if (view == "mine") "Nothing from your shows right now · press ▲ and pick For you" else "Nothing here yet",
+                color = white(.6f), fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
             LazyColumn(Modifier.weight(1f).padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                itemsIndexed(spec.catchup) { si, sec ->
+                itemsIndexed(shown, key = { _, sec -> view + sec.title }) { si, sec ->
                     Column {
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text(sec.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
