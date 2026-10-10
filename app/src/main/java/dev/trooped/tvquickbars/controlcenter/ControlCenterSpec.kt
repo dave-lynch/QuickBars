@@ -20,6 +20,12 @@ import org.json.JSONObject
  *   catchup       [{section, items:[{id, title, sub, img, badge, prog, days, detail}]}]
  *   rooms         [{id, name, floor, summary, devices:[tile], actions:[tile], temp:{now, low, low_at, high, high_at, hum, points:[°C]}}]
  *                 Home Assistant's rooms (areas) for the Rooms page; a room with temp shows its 24-hour temperature.
+ *                 A room action whose id starts "page:" (e.g. "page:meals") opens that page of the app instead of running a script.
+ *   meals         Kitchen > Dinners & shopping (sent on "meals:open" and after each change, as an update): {window, nights:[{date, day,
+ *                 long, name, kind (dinner|takeaway|leftovers|empty), img, mins, needs:[..], count, ai, changed}], choices:[{id, name, img,
+ *                 mins, count, needs}], sections:[{id, title, note, count, sub, items:[{id, name, sub, q, price, price_txt, on, unpriced}]}],
+ *                 total:{amount, items, dinners, usual, unpriced, removed:[..], removed_n}, draft, note}. A TV-only draft in HA:
+ *                 presses go back as meals:set:<date>:<choice id|takeaway|leftovers|clear|orig>, meals:item:<id>:<0|1>, meals:q:<id>:<n>, meals:reset.
  * Icons are names: a drawable "cc_<name>" (bundled MDI icons) or an existing drawable of that name.
  */
 data class CcNow(val label: String, val title: String, val sub: String, val image: String?)
@@ -49,6 +55,17 @@ data class CcTemp(val now: String, val low: String, val lowAt: String, val high:
 data class CcRoom(val id: String, val name: String, val floor: String, val summary: String,
                   val devices: List<CcTile>, val actions: List<CcTile>, val temp: CcTemp?)
 
+data class CcMealNight(val date: String, val day: String, val long: String, val name: String, val kind: String, val img: String?,
+                       val mins: String, val needs: List<String>, val count: Int, val ai: Boolean, val changed: Boolean)
+data class CcMealChoice(val id: String, val name: String, val img: String?, val mins: String, val count: Int, val needs: List<String>)
+data class CcShopItem(val id: String, val name: String, val sub: String, val q: Int, val price: Double, val priceTxt: String,
+                      val on: Boolean, val unpriced: Boolean)
+data class CcShopSection(val id: String, val title: String, val note: String, val count: Int, val sub: String, val items: List<CcShopItem>)
+data class CcMealTotal(val amount: String, val items: Int, val dinners: Int, val usual: String, val unpriced: Int,
+                       val removed: List<String>, val removedN: Int)
+data class CcMeals(val window: String, val nights: List<CcMealNight>, val choices: List<CcMealChoice>,
+                   val sections: List<CcShopSection>, val total: CcMealTotal, val draft: Boolean, val note: String)
+
 data class ControlCenterSpec(
     val action: String,
     val page: String,
@@ -60,6 +77,7 @@ data class ControlCenterSpec(
     val tiles: List<CcTile>,
     val catchup: List<CcSection>,
     val rooms: List<CcRoom> = emptyList(),
+    val meals: CcMeals? = null,
 ) {
     companion object {
         fun parse(o: JSONObject): ControlCenterSpec = ControlCenterSpec(
@@ -96,7 +114,34 @@ data class ControlCenterSpec(
                 })
             },
             rooms = o.optJSONArray("rooms").objects().map { room(it) },
+            meals = o.optJSONObject("meals")?.takeIf { it.has("nights") }?.let { meals(it) },
         )
+
+        private fun meals(m: JSONObject): CcMeals {
+            val t = m.optJSONObject("total") ?: JSONObject()
+            return CcMeals(
+                window = m.optString("window"),
+                nights = m.optJSONArray("nights").objects().map {
+                    CcMealNight(it.optString("date"), it.optString("day"), it.optString("long"), it.optString("name"), it.optString("kind"),
+                        it.str("img"), it.optString("mins"), it.optJSONArray("needs").strings(), it.optInt("count"),
+                        it.optBoolean("ai"), it.optBoolean("changed"))
+                },
+                choices = m.optJSONArray("choices").objects().map {
+                    CcMealChoice(it.optString("id"), it.optString("name"), it.str("img"), it.optString("mins"), it.optInt("count"),
+                        it.optJSONArray("needs").strings())
+                },
+                sections = m.optJSONArray("sections").objects().map { s ->
+                    CcShopSection(s.optString("id"), s.optString("title"), s.optString("note"), s.optInt("count"), s.optString("sub"),
+                        s.optJSONArray("items").objects().map {
+                            CcShopItem(it.optString("id"), it.optString("name"), it.optString("sub"), it.optDouble("q", 1.0).toInt().coerceAtLeast(1),
+                                it.optDouble("price", 0.0), it.optString("price_txt"), it.optBoolean("on"), it.optBoolean("unpriced"))
+                        })
+                },
+                total = CcMealTotal(t.optString("amount"), t.optInt("items"), t.optInt("dinners"), t.optString("usual"), t.optInt("unpriced"),
+                    t.optJSONArray("removed").strings(), t.optInt("removed_n")),
+                draft = m.optBoolean("draft"), note = m.optString("note"),
+            )
+        }
 
         private fun room(r: JSONObject): CcRoom = CcRoom(
             r.optString("id"), r.optString("name"), r.optString("floor"), r.optString("summary"),

@@ -179,7 +179,16 @@ fun ControlCenterRoot(
     var catchupFrom by remember(spec.page) { mutableStateOf("notifications") }
     var openGroup by remember { mutableStateOf<String?>(null) }
     var room by remember { mutableStateOf<String?>(null) }   // the room open on the "room" page
-    var tvMenu by remember { mutableStateOf<CcCatchupItem?>(null) }   // hold-OK menu open on the TV page   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
+    var tvMenu by remember { mutableStateOf<CcCatchupItem?>(null) }
+    // Kitchen > Dinners & shopping: tab, the night being changed (dinner picker), the item whose quantity is being set, and
+    // presses shown at once until HA's update arrives (cleared whenever new meals data comes in)
+    var mealTab by remember { mutableIntStateOf(0) }
+    var mealPick by remember { mutableStateOf<CcMealNight?>(null) }
+    var mealQty by remember { mutableStateOf<CcShopItem?>(null) }
+    var mealQtyVal by remember { mutableIntStateOf(1) }
+    var mealQtyHeld by remember { mutableStateOf(false) }
+    val shopOv = remember { mutableStateMapOf<String, Pair<Boolean, Int>>() }
+    LaunchedEffect(spec.meals) { shopOv.clear() }   // hold-OK menu open on the TV page   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
     val dismissed = remember { mutableStateListOf<String>() }
     val notes = spec.notifications.filter { it.id !in dismissed }
     var shown by remember { mutableStateOf(false) }
@@ -193,8 +202,9 @@ fun ControlCenterRoot(
 
     fun back() { if (page == "home" && openGroup != null) { openGroup = null; return }
                  if (page == "catchup" && tvMenu != null) { tvMenu = null; return }
+                 if (page == "meals" && mealPick != null) { mealPick = null; return }
                  page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"
-                                      "room" -> "rooms"; "rooms" -> "home"; else -> "close" }
+                                      "room" -> "rooms"; "rooms" -> "home"; "meals" -> "room"; else -> "close" }
                  if (page == "close") onClose() }
     fun openNote(n: CcNotification) {
         when {
@@ -246,6 +256,20 @@ fun ControlCenterRoot(
                     if (e.type == KeyEventType.KeyUp) { val cam = live!!; live = null
                         onCamera(cam, spec.cameras.firstOrNull { it.entity == cam }?.rtsp?.takeIf { it.isNotBlank() }); onClose() }
                     true
+                } else if (mealQty != null) {
+                    val it0 = mealQty!!
+                    when {
+                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> mealQtyVal = (mealQtyVal + 1).coerceAtMost(20)
+                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> mealQtyVal = (mealQtyVal - 1).coerceAtLeast(1)
+                        e.isOk() && mealQtyHeld -> { if (e.type == KeyEventType.KeyUp) mealQtyHeld = false }
+                        (e.isOk() || e.key == Key.Back || e.key == Key.Escape) && e.type == KeyEventType.KeyUp -> {
+                            if (mealQtyVal != (shopOv[it0.id]?.second ?: it0.q)) {
+                                shopOv[it0.id] = (shopOv[it0.id]?.first ?: it0.on) to mealQtyVal; onAction("meals:q:${it0.id}:$mealQtyVal")
+                            }
+                            mealQty = null
+                        }
+                    }
+                    true
                 } else if (dim != null) {
                     when {
                         e.type != KeyEventType.KeyDown && !(e.isOk() || e.key == Key.Back || e.key == Key.Escape) -> {}
@@ -272,9 +296,16 @@ fun ControlCenterRoot(
         }
         when (page) {
             "catchup" -> CatchupPage(spec, onAction = onAction, onClose = onClose, menu = tvMenu, onMenu = { tvMenu = it })
+            "meals" -> {
+                MealsPage(spec.meals, tab = mealTab, onTab = { mealTab = it }, onAction = onAction, overrides = shopOv,
+                    onPick = { mealPick = it }, onQty = { i -> mealQty = i; mealQtyVal = shopOv[i.id]?.second ?: i.q; mealQtyHeld = true })
+                mealPick?.let { n -> MealPicker(n, spec.meals?.choices ?: emptyList(), onPick = { v -> onAction("meals:set:${n.date}:$v"); mealPick = null }) }
+                mealQty?.let { i -> QtyPopup(i.name, mealQtyVal, i.price) }
+            }
             "rooms", "room" -> {
                 val r = spec.rooms.firstOrNull { it.id == room }
-                if (page == "room" && r != null) RoomPage(r, onAction = onAction, onDim = { openDim(it) })
+                if (page == "room" && r != null) RoomPage(r, onAction = onAction, onDim = { openDim(it) },
+                    onPage = { pg -> if (pg == "meals") { mealTab = 0; onAction("meals:open") }; page = pg })
                 else RoomsPage(spec.rooms, onOpen = { room = it; page = "room" }, from = room)
                 dim?.let { Dimmer(it.title, dimPct, dimTargets.map { t -> t.title to (if (t.id == it.id) dimPct else dimPcts[t.id] ?: 0) }, dimSel, volume = dimVerb == "vol") }
             }
@@ -740,7 +771,7 @@ private fun RoomsPage(rooms: List<CcRoom>, onOpen: (String) -> Unit, from: Strin
 /** One room: its devices as tiles (OK turns on / off; hold OK on a light for brightness, on a TV or speaker for volume),
  *  the room's actions (scripts in that area), and for a room with a temperature sensor its last 24 hours. */
 @Composable
-private fun RoomPage(r: CcRoom, onAction: (String) -> Unit, onDim: (CcTile) -> Unit) {
+private fun RoomPage(r: CcRoom, onAction: (String) -> Unit, onDim: (CcTile) -> Unit, onPage: (String) -> Unit = {}) {
     val first = remember(r.id) { FocusRequester() }
     var hasFocus by remember { mutableStateOf(false) }
     LaunchedEffect(r.id) { delay(60); runCatching { first.requestFocus() } }
@@ -788,7 +819,7 @@ private fun RoomPage(r: CcRoom, onAction: (String) -> Unit, onDim: (CcTile) -> U
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 r.actions.forEachIndexed { i, a -> key(a.id) {
                     Focusable(Modifier.height(44.dp), RoundedCornerShape(14.dp), requester = if (r.devices.isEmpty() && i == 0) first else null,
-                        onOk = { onAction("room:run:${a.id}") }) {
+                        onOk = { if (a.id.startsWith("page:")) onPage(a.id.removePrefix("page:")) else onAction("room:run:${a.id}") }) {
                         Text(a.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
                             modifier = Modifier.align(Alignment.Center).padding(horizontal = 18.dp))
                     }
@@ -831,6 +862,308 @@ private fun TempChart(pts: List<Float>, modifier: Modifier) {
         drawCircle(Color(0xFF7FB8FF), 6.dp.toPx(), at(pts.indexOf(lo)))
         drawCircle(Amber, 6.dp.toPx(), at(pts.indexOf(hi)))
         drawCircle(Color.White, 6.dp.toPx(), at(pts.size - 1))
+    }
+}
+
+// ============================================================ Kitchen > Dinners & shopping (a TV-only draft in HA)
+/** Three tabs: the nights the next order covers (OK changes a night's dinner), the suggested shopping by section (OK ticks an item
+ *  in or out, hold OK sets the quantity) and the total. Everything comes from HA (tv_meals.py); presses go back as meals:<...>. */
+@Composable
+private fun MealsPage(
+    m: CcMeals?, tab: Int, onTab: (Int) -> Unit, onAction: (String) -> Unit, overrides: Map<String, Pair<Boolean, Int>>,
+    onPick: (CcMealNight) -> Unit, onQty: (CcShopItem) -> Unit,
+) {
+    val tabs = listOf("Dinners", "Review shopping", "Total")
+    val tabReq = remember { tabs.map { FocusRequester() } }
+    Column(Modifier.fillMaxSize().background(Color(0xFF0D0A14)).padding(start = 44.dp, end = 44.dp, top = 22.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
+            Text("Kitchen · ", color = white(.55f), fontSize = 14.sp)
+            Text("Dinners & shopping", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            tabs.forEachIndexed { i, t ->
+                Focusable(Modifier.padding(start = 8.dp).height(36.dp), RoundedCornerShape(18.dp),
+                    bg = if (i == tab) Amber else white(.10f), focusedBg = if (i == tab) Color(0xFFFFC56A) else white(.24f),
+                    requester = tabReq[i], onOk = { onTab(i) }) {
+                    Text("${i + 1} · $t", color = if (i == tab) Ink else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = 16.dp))
+                }
+            }
+        }
+        if (m == null) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text("Working out this week's dinners and shopping…", color = white(.7f), fontSize = 16.sp)
+            }
+            Text("Back", color = white(.4f), fontSize = 11.sp)
+            return@Column
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when (tab) {
+                0 -> MealNights(m, onPick = onPick, onNext = { onTab(1) })
+                1 -> ShopReview(m, overrides, onAction = onAction, onQty = onQty, onNext = { onTab(2) })
+                else -> ShopTotal(m, overrides, onAction = onAction)
+            }
+        }
+        Text(m.note + "  ·  " + when (tab) {
+            0 -> "▲ ▼ nights · OK pick a different dinner · Back"
+            1 -> "OK tick in or out · hold OK quantity · Back"
+            else -> "Back"
+        }, color = white(.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun MealNights(m: CcMeals, onPick: (CcMealNight) -> Unit, onNext: () -> Unit) {
+    val first = remember { FocusRequester() }
+    var sel by remember { mutableStateOf(m.nights.firstOrNull()?.date) }
+    LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
+    val cur = m.nights.firstOrNull { it.date == sel } ?: m.nights.firstOrNull()
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(3.dp)) {
+            itemsIndexed(m.nights, key = { _, n -> n.date }) { i, n ->
+                Focusable(Modifier.fillMaxWidth().height(56.dp).onFocusChanged { if (it.isFocused) sel = n.date }, RoundedCornerShape(14.dp),
+                    bg = if (n.kind == "dinner") white(.08f) else white(.04f), requester = if (i == 0) first else null, onOk = { onPick(n) }) {
+                    Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(n.day, color = if (n.date == sel) Amber else white(.6f), fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(58.dp))
+                        Box(Modifier.size(width = 64.dp, height = 40.dp).clip(RoundedCornerShape(8.dp)).background(white(.08f)), contentAlignment = Alignment.Center) {
+                            if (n.img != null) Net(n.img, Modifier.fillMaxSize())
+                            else Image(painterResource(ccIcon(if (n.kind == "dinner") "silverware_fork_knife" else "shopping_outline")), null, Modifier.size(18.dp),
+                                colorFilter = ColorFilter.tint(white(.6f)))
+                        }
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(n.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false))
+                                if (n.ai) Badge("AI")
+                                if (n.changed) Badge("CHANGED")
+                            }
+                            Text(when (n.kind) { "takeaway" -> "Nothing to buy"; "leftovers" -> "Nothing to buy"; "empty" -> "OK to pick a dinner"
+                                else -> listOf(n.mins, n.needs.take(4).joinToString(" · ") { shortNeed(it) }).filter { it.isNotBlank() }.joinToString(" · ") },
+                                color = white(.6f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+            item(key = "next") {
+                Focusable(Modifier.padding(top = 4.dp).height(42.dp), RoundedCornerShape(14.dp), bg = Amber, focusedBg = Color(0xFFFFC56A), onOk = onNext) {
+                    Text("Next: review shopping ›", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.Center).padding(horizontal = 18.dp))
+                }
+            }
+        }
+        // the highlighted night
+        cur?.let { n ->
+            Column(Modifier.width(300.dp).fillMaxHeight().clip(RoundedCornerShape(20.dp)).background(white(.06f))) {
+                Box(Modifier.fillMaxWidth().height(150.dp).background(white(.08f)), contentAlignment = Alignment.Center) {
+                    if (n.img != null) Net(n.img, Modifier.fillMaxSize())
+                    else Image(painterResource(ccIcon(if (n.kind == "dinner") "silverware_fork_knife" else "shopping_outline")), null, Modifier.size(40.dp),
+                        colorFilter = ColorFilter.tint(white(.4f)))
+                }
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(n.long.uppercase(), color = Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(n.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (n.needs.isNotEmpty()) {
+                        Text("INGREDIENTS · ${n.needs.size}", color = white(.55f), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+                        n.needs.take(7).forEach { Text(shortNeed(it), color = white(.85f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        if (n.needs.size > 7) Text("+${n.needs.size - 7} more", color = white(.5f), fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "Lean irish beef mince typically 5% fat 350g" -> "Lean irish beef mince" (drops brand prefixes and pack sizes) */
+private fun shortNeed(s: String): String =
+    s.replace(Regex("(?i)^(dunnes stores |my family favourites )"), "").replace(Regex("(?i)\\s+(typically.*|\\d+(\\.\\d+)?\\s*(x\\s*\\d+(\\.\\d+)?\\s*)?(g|kg|ml|l|litre)\\b.*)$"), "")
+        .replaceFirstChar { it.uppercase() }
+
+@Composable
+private fun Badge(t: String) {
+    Text(t, color = Ink, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(99.dp)).background(Amber).padding(horizontal = 6.dp, vertical = 1.dp))
+}
+
+private fun eur(v: Double) = "€" + String.format(Locale.UK, "%.2f", v)
+
+@Composable
+private fun ShopReview(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction: (String) -> Unit, onQty: (CcShopItem) -> Unit, onNext: () -> Unit) {
+    var sec by remember { mutableStateOf(m.sections.firstOrNull { it.id == "week" }?.id ?: m.sections.firstOrNull()?.id) }
+    val secReq = remember(m.sections.size) { m.sections.map { FocusRequester() } }
+    LaunchedEffect(Unit) { delay(80); runCatching { secReq[m.sections.indexOfFirst { it.id == sec }.coerceAtLeast(0)].requestFocus() } }
+    fun on(i: CcShopItem) = ov[i.id]?.first ?: i.on
+    fun q(i: CcShopItem) = ov[i.id]?.second ?: i.q
+    val total = m.sections.sumOf { s -> s.items.filter { on(it) }.sumOf { it.price * q(it) } }
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(Modifier.width(240.dp).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            m.sections.forEachIndexed { i, s ->
+                val on = s.items.filter { on(it) }
+                Focusable(Modifier.fillMaxWidth().height(50.dp).onFocusChanged { if (it.isFocused) sec = s.id }, RoundedCornerShape(14.dp),
+                    bg = if (s.id == sec) white(.16f) else white(.06f), requester = secReq[i], onOk = { sec = s.id }) {
+                    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.Center) {
+                        Text(s.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Text("${on.size} of ${s.items.size} · ${eur(on.sumOf { it.price * q(it) })}", color = white(.6f), fontSize = 11.sp)
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Amber.copy(alpha = .14f)).padding(12.dp)) {
+                Text("Order so far", color = white(.75f), fontSize = 11.sp)
+                Text(eur(total), color = Amber, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                if (m.total.usual.isNotBlank()) Text("Your usual order is ${m.total.usual}", color = white(.6f), fontSize = 11.sp)
+            }
+            Focusable(Modifier.fillMaxWidth().height(40.dp), RoundedCornerShape(14.dp), bg = Amber, focusedBg = Color(0xFFFFC56A), onOk = onNext) {
+                Text("Next: total ›", color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
+            }
+        }
+        val s = m.sections.firstOrNull { it.id == sec }
+        Column(Modifier.weight(1f).fillMaxHeight()) {
+            if (s != null) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(s.title, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                    Text("  " + s.note, color = white(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (s.items.isEmpty()) Text("Nothing here this week.", color = white(.6f), fontSize = 14.sp, modifier = Modifier.padding(top = 16.dp))
+                LazyColumn(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp), contentPadding = PaddingValues(3.dp)) {
+                    items(s.items, key = { x -> x.id + s.id }) { item ->
+                        val isOn = on(item); val qq = q(item)
+                        Focusable(Modifier.fillMaxWidth().height(48.dp), RoundedCornerShape(12.dp), bg = if (isOn) white(.09f) else white(.03f),
+                            onLong = { onQty(item) }, onOk = { onAction("meals:item:${item.id}:${if (isOn) 0 else 1}"); (ov as? MutableMap)?.put(item.id, !isOn to qq) }) {
+                            Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(22.dp).clip(RoundedCornerShape(7.dp)).background(if (isOn) Amber else Color.Transparent)
+                                    .border(2.dp, if (isOn) Amber else white(.5f), RoundedCornerShape(7.dp)), contentAlignment = Alignment.Center) {
+                                    if (isOn) Image(painterResource(ccIcon("check")), null, Modifier.size(16.dp), colorFilter = ColorFilter.tint(Ink))
+                                }
+                                Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                    Text(item.name, color = if (isOn) Color.White else white(.5f), fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(if (isOn) item.sub else "Not this time · " + item.sub, color = white(.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Text("× $qq", color = if (isOn) Color.White else white(.4f), fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 10.dp))
+                                Text(if (item.unpriced) "–" else eur(item.price * qq), color = if (isOn) white(.85f) else white(.4f), fontSize = 13.sp,
+                                    modifier = Modifier.width(64.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShopTotal(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction: (String) -> Unit) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
+    fun on(i: CcShopItem) = ov[i.id]?.first ?: i.on
+    fun q(i: CcShopItem) = ov[i.id]?.second ?: i.q
+    val all = m.sections.flatMap { s -> s.items.filter { on(it) } }
+    val total = all.sumOf { it.price * q(it) }
+    val unpriced = all.count { it.unpriced }
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            listOf(Triple("Estimated total", eur(total), Amber), Triple("Items", "${all.size}", Color.White),
+                Triple("Dinners", "${m.total.dinners}", Color.White), Triple("Your usual order", m.total.usual.removePrefix("about ").ifBlank { "–" }, Color.White)).forEach { (l, v, c) ->
+                Column(Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).background(white(.10f)).padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Text(l, color = white(.65f), fontSize = 12.sp)
+                    Text(v, color = c, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(18.dp)).background(white(.06f)).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("By section", color = white(.75f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                m.sections.forEach { s ->
+                    val its = s.items.filter { on(it) }
+                    Row { Text("${s.title} · ${its.size}", color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                          Text(eur(its.sumOf { it.price * q(it) }), color = white(.8f), fontSize = 14.sp) }
+                }
+                if (unpriced > 0) Text("$unpriced item${if (unpriced > 1) "s" else ""} without a price yet (not in the total)", color = white(.5f), fontSize = 12.sp)
+            }
+            Column(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(18.dp)).background(white(.06f)).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("Taken off this time", color = white(.75f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                val off = m.sections.filter { it.id !in listOf("check", "cupboard") }.flatMap { s -> s.items.filter { !on(it) } }
+                if (off.isEmpty()) Text("Nothing: everything suggested is on the list.", color = white(.6f), fontSize = 13.sp)
+                off.take(8).forEach { Text(it.name, color = white(.75f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                if (off.size > 8) Text("+${off.size - 8} more", color = white(.5f), fontSize = 12.sp)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Focusable(Modifier.height(42.dp), RoundedCornerShape(14.dp), requester = first, onOk = { onAction("meals:reset") }) {
+                Text("Start again (undo TV changes)", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.Center).padding(horizontal = 18.dp))
+            }
+            Text("Ordering from the TV comes once you're happy with this.", color = white(.5f), fontSize = 12.sp)
+        }
+    }
+}
+
+/** Full-screen dinner picker for one night: Takeaway / Leftovers / Nothing / Keep the plan, then your dinners. */
+@Composable
+private fun MealPicker(n: CcMealNight, choices: List<CcMealChoice>, onPick: (String) -> Unit) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(n.date) { delay(60); runCatching { first.requestFocus() } }
+    val specials = listOf(Triple("orig", "As planned", "shopping_outline"), Triple("takeaway", "Takeaway", "shopping_outline"),
+        Triple("leftovers", "Leftovers", "history"), Triple("clear", "Nothing", "close_circle_outline"))
+    Column(Modifier.fillMaxSize().background(Color(0xF20D0A14)).padding(start = 44.dp, end = 44.dp, top = 22.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Dinner for ", color = white(.6f), fontSize = 16.sp)
+            Text(n.long, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("   now: ${n.name}", color = white(.55f), fontSize = 13.sp)
+        }
+        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(4.dp)) {
+            item(key = "sp") {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    specials.forEachIndexed { i, (v, t, ic) ->
+                        Focusable(Modifier.weight(1f).height(44.dp), RoundedCornerShape(14.dp), requester = if (i == 0) first else null, onOk = { onPick(v) }) {
+                            Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically) {
+                                Image(painterResource(ccIcon(ic)), null, Modifier.size(16.dp), colorFilter = ColorFilter.tint(white(.8f)))
+                                Text("  $t", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+            choices.chunked(5).forEachIndexed { ri, row ->
+                item(key = "c$ri") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        row.forEach { c ->
+                            Focusable(Modifier.weight(1f).height(132.dp), RoundedCornerShape(14.dp), onOk = { onPick(c.id) }) {
+                                Column(Modifier.fillMaxSize()) {
+                                    Box(Modifier.fillMaxWidth().height(76.dp).background(white(.06f)), contentAlignment = Alignment.Center) {
+                                        if (c.img != null) Net(c.img, Modifier.fillMaxSize())
+                                        else Image(painterResource(ccIcon("silverware_fork_knife")), null, Modifier.size(26.dp), colorFilter = ColorFilter.tint(white(.4f)))
+                                    }
+                                    Column(Modifier.padding(horizontal = 9.dp, vertical = 6.dp)) {
+                                        Text(c.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(listOf(c.mins, "${c.count} items").filter { it.isNotBlank() }.joinToString(" · "), color = white(.6f), fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+                        repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+        Text("OK put it on ${n.day.lowercase().replaceFirstChar { it.uppercase() }} · Back keeps it as it is", color = white(.4f), fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun QtyPopup(name: String, q: Int, price: Double) {
+    Box(Modifier.fillMaxSize().background(Color(0xE6140F22)), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 520.dp))
+            Text("× $q", color = Amber, fontSize = 44.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+            if (price > 0) Text(eur(price * q), color = white(.7f), fontSize = 14.sp)
+            Text("▲ ▼ quantity · OK done", color = white(.5f), fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp))
+        }
     }
 }
 

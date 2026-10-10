@@ -57,6 +57,8 @@ class ControlCenterController(
                 cameraStatus = if (data.has("camera_status")) s.cameraStatus else cur.cameraStatus,
                 tiles = if (data.has("tiles")) s.tiles else cur.tiles,
                 catchup = if (data.has("catchup")) s.catchup else cur.catchup,
+                rooms = if (data.has("rooms")) s.rooms else cur.rooms,
+                meals = if (data.has("meals")) s.meals else cur.meals,
             ) }
             else -> { spec.value = s; if (view == null) show() else { close(); spec.value = s; show() } }
         }
