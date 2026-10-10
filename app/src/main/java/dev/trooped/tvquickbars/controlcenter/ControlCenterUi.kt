@@ -16,6 +16,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -279,10 +281,37 @@ fun ControlCenterRoot(
             else -> dimPcts[t.id] ?: pctOf(t)
         }
     }
+    // Colour temperature (lights that have one): hold OK switches the slider between brightness and colour; ▲ ▼ then moves
+    // warmer / cooler in 7 steps over the light's own range - the Warm, Soft, Neutral and Cool presets (as on the room card)
+    // and one step between each pair. Sent as ct:<light>:<kelvin>.
+    var ctMode by remember { mutableStateOf(false) }
+    var ctK by remember { mutableIntStateOf(0) }
+    var ctSent by remember { mutableIntStateOf(0) }
+    val ctKs = remember { mutableStateMapOf<String, Int>() }
+    var okLong by remember { mutableStateOf(false) }   // a hold of OK switched the mode: its release doesn't close
+    fun hasCt(t: CcTile?) = t != null && t.kmin > 0 && t.kmax > t.kmin
+    fun ctOf(t: CcTile) = if (!hasCt(t)) 0 else (if (t.k > 0) t.k else (t.kmin + t.kmax) / 2).coerceIn(t.kmin, t.kmax)
+    fun ctClamp(t: CcTile, k: Int) = if (!hasCt(t)) 0 else k.coerceIn(t.kmin, t.kmax)
+    fun ctStep(up: Boolean) {
+        val t = dim ?: return; if (!hasCt(t)) return
+        val span = (t.kmax - t.kmin) / 6.0
+        val p = ((ctK - t.kmin) / span).roundToInt().coerceIn(0, 6) + (if (up) 1 else -1)
+        ctK = (t.kmin + p.coerceIn(0, 6) * span).roundToInt()
+    }
+    fun shownCt(i: Int): Int {
+        val t = dimTargets.getOrNull(i) ?: return 0
+        return when {
+            t.id == dim?.id -> ctK
+            dimSel == 0 && dimTargets.size > 1 && i > 0 -> ctClamp(t, ctK)
+            else -> ctKs[t.id] ?: ctOf(t)
+        }
+    }
     fun openDim(t: CcTile) {
         dimTargets = listOf(t) + t.members; dimSel = 0; dimPcts.clear(); dimTargets.forEach { dimPcts[it.id] = pctOf(it) }
+        ctKs.clear(); dimTargets.forEach { ctKs[it.id] = ctOf(it) }
         dimVerb = if (t.id.startsWith("media_player.")) "vol" else "bright"
         dim = t; dimPct = pctOf(t); dimSent = dimPct; dimHeld = true; dimTouched = 0L
+        ctMode = false; okLong = false; ctK = ctOf(t); ctSent = ctK
     }
     // Fresh levels from Home Assistant (the panel refreshes after a change, or the lights moved some other way) replace the
     // ones shown, unless a button was pressed in the last 2.5 s (then the slider's own value is newer).
@@ -292,9 +321,9 @@ fun ControlCenterRoot(
         val fresh = (spec.tiles + spec.rooms.flatMap { it.devices }).firstOrNull { it.id == d.id } ?: return@LaunchedEffect
         val parts = listOf(fresh) + fresh.members
         if (parts.size != dimTargets.size) return@LaunchedEffect
-        dimTargets = parts; parts.forEach { dimPcts[it.id] = pctOf(it) }
+        dimTargets = parts; parts.forEach { dimPcts[it.id] = pctOf(it); ctKs[it.id] = ctOf(it) }
         val cur = parts[dimSel.coerceIn(0, parts.size - 1)]
-        dim = cur; dimPct = pctOf(cur); dimSent = dimPct
+        dim = cur; dimPct = pctOf(cur); dimSent = dimPct; ctK = ctOf(cur); ctSent = ctK
     }
     fun pickDim(i: Int) {
         val d = dim ?: return
@@ -303,13 +332,24 @@ fun ControlCenterRoot(
         if (dimSel == 0 && dimTargets.size > 1) dimTargets.drop(1).forEach { dimPcts[it.id] = dimPct }   // "All" set every part
         dimPcts[d.id] = dimPct
         if (dimSel != 0 && dimTargets.size > 1) dimPcts[dimTargets[0].id] = groupAvg()
+        if (hasCt(d)) {
+            if (ctK != ctSent) onAction("ct:${d.id}:$ctK")
+            if (dimSel == 0 && dimTargets.size > 1) dimTargets.drop(1).forEach { ctKs[it.id] = ctClamp(it, ctK) }
+            ctKs[d.id] = ctK
+        }
         dimSel = i.coerceIn(0, dimTargets.size - 1); val t = dimTargets[dimSel]
         dim = t; dimPct = dimPcts[t.id] ?: pctOf(t); dimSent = dimPct
+        ctK = ctKs[t.id] ?: ctOf(t); ctSent = ctK; if (!hasCt(t)) ctMode = false
     }
     LaunchedEffect(dimPct, dim) {
         val t = dim ?: return@LaunchedEffect
         if (dimPct == dimSent) return@LaunchedEffect
         delay(300); dimSent = dimPct; onAction("$dimVerb:${t.id}:$dimPct")
+    }
+    LaunchedEffect(ctK, dim) {
+        val t = dim ?: return@LaunchedEffect
+        if (!hasCt(t) || ctK == ctSent) return@LaunchedEffect
+        delay(300); ctSent = ctK; onAction("ct:${t.id}:$ctK")
     }
 
     Box(
@@ -337,14 +377,19 @@ fun ControlCenterRoot(
                 } else if (dim != null) {
                     when {
                         e.type != KeyEventType.KeyDown && !(e.isOk() || e.key == Key.Back || e.key == Key.Escape) -> {}
-                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); dimPct = (dimPct + dimStep).coerceAtMost(100) }
-                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); dimPct = (dimPct - dimStep).coerceAtLeast(0) }
+                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); if (ctMode) ctStep(true) else dimPct = (dimPct + dimStep).coerceAtMost(100) }
+                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); if (ctMode) ctStep(false) else dimPct = (dimPct - dimStep).coerceAtLeast(0) }
                         e.key == Key.DirectionLeft && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); pickDim(dimSel - 1) }
                         e.key == Key.DirectionRight && e.type == KeyEventType.KeyDown -> { dimTouched = System.currentTimeMillis(); pickDim(dimSel + 1) }
                         e.isOk() && dimHeld -> { if (e.type == KeyEventType.KeyUp) dimHeld = false }
+                        // hold OK: brightness <-> colour (a light with a colour temperature); the release then doesn't close
+                        e.isOk() && e.type == KeyEventType.KeyDown && e.nativeKeyEvent.repeatCount == 1 && hasCt(dim) -> {
+                            okLong = true; ctMode = !ctMode; dimTouched = System.currentTimeMillis() }
+                        e.isOk() && e.type == KeyEventType.KeyUp && okLong -> okLong = false
                         (e.isOk() || e.key == Key.Back || e.key == Key.Escape) && e.type == KeyEventType.KeyUp -> {
                             // close; send the last value at once if the pause hadn't sent it yet
                             if (dimPct != dimSent) { dimSent = dimPct; onAction("$dimVerb:${dim!!.id}:$dimPct") }
+                            if (hasCt(dim) && ctK != ctSent) { ctSent = ctK; onAction("ct:${dim!!.id}:$ctK") }
                             dim = null
                         }
                     }
@@ -373,7 +418,8 @@ fun ControlCenterRoot(
                 if (page == "room" && r != null) RoomPage(r, onAction = onAction, onDim = { openDim(it) },
                     onPage = { pg -> if (pg == "meals") { mealsFrom = "room"; mealTab = 0; onAction("meals:open") }; page = pg })
                 else RoomsPage(spec.rooms, onOpen = { room = it; page = "room" }, from = room)
-                dim?.let { Dimmer(it.title, dimPct, dimTargets.mapIndexed { i, t -> t.title to shown(i) }, dimSel, volume = dimVerb == "vol") }
+                dim?.let { Dimmer(it.title, dimPct, dimTargets.mapIndexed { i, t -> t.title to shown(i) }, dimSel, volume = dimVerb == "vol",
+                    ct = if (hasCt(it)) CtView(ctMode, ctK, it.kmin, it.kmax, dimTargets.indices.map { i -> shownCt(i) }) else null) }
             }
             else -> Box(
                 Modifier.align(Alignment.CenterEnd).padding(20.dp).width(350.dp).fillMaxHeight()
@@ -387,7 +433,8 @@ fun ControlCenterRoot(
                     onCatchup = { catchupFrom = "home"; page = "catchup" }, onRooms = { room = null; page = "rooms" },
                     openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
-                dim?.let { Dimmer(it.title, dimPct, dimTargets.mapIndexed { i, t -> t.title to shown(i) }, dimSel) }
+                dim?.let { Dimmer(it.title, dimPct, dimTargets.mapIndexed { i, t -> t.title to shown(i) }, dimSel,
+                    ct = if (hasCt(it)) CtView(ctMode, ctK, it.kmin, it.kmax, dimTargets.indices.map { i -> shownCt(i) }) else null) }
                 noteMenu?.let { n -> NoteMenu(n, onPick = { a -> noteMenu = null
                     when (a) {
                         "dismiss" -> dismiss(n)
@@ -1376,18 +1423,42 @@ private fun QtyPopup(name: String, q: Int, price: Double) {
 
 // ============================================================ brightness slider (hold OK on a light tile)
 @Composable
-private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emptyList(), sel: Int = 0, volume: Boolean = false) {
+private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emptyList(), sel: Int = 0, volume: Boolean = false,
+                   ct: CtView? = null) {
     Box(Modifier.fillMaxSize().background(Color(0xE6140F22)), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Text(if (volume) "Volume $pct" else if (pct == 0) "Off" else "$pct%", color = Amber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
-            // tall pill like the iOS Control Centre brightness slider; the lit part grows from the bottom
-            Box(Modifier.width(78.dp).height(170.dp).clip(RoundedCornerShape(24.dp)).background(white(.14f)),
-                contentAlignment = Alignment.BottomCenter) {
-                Box(Modifier.fillMaxWidth().fillMaxHeight(pct / 100f).background(Color(0xFFF5F2FA)))
-                Image(painterResource(ccIcon(if (volume) "speaker" else "lightbulb")), null, Modifier.padding(bottom = 14.dp).size(24.dp),
-                    colorFilter = ColorFilter.tint(if (pct >= 15) Color(0xFFF59E0B) else Color.White))
+            Text(if (ct != null && ct.on) "${ctName(ct.k, ct.kmin, ct.kmax)} · ${ct.k}K"
+                 else if (volume) "Volume $pct" else if (pct == 0) "Off" else "$pct%",
+                color = Amber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                // tall pill like the iOS Control Centre brightness slider; the lit part grows from the bottom
+                val briOn = ct == null || !ct.on
+                Box(Modifier.width(78.dp).height(170.dp).clip(RoundedCornerShape(24.dp)).background(white(.14f))
+                    .border(if (ct != null && briOn) 2.dp else 0.dp, if (ct != null && briOn) Amber else Color.Transparent, RoundedCornerShape(24.dp)),
+                    contentAlignment = Alignment.BottomCenter) {
+                    Box(Modifier.fillMaxWidth().fillMaxHeight(pct / 100f).background(Color(0xFFF5F2FA)))
+                    Image(painterResource(ccIcon(if (volume) "speaker" else "lightbulb")), null, Modifier.padding(bottom = 14.dp).size(24.dp),
+                        colorFilter = ColorFilter.tint(if (pct >= 15) Color(0xFFF59E0B) else Color.White))
+                }
+                if (ct != null) {
+                    // colour pill: warm at the bottom, cool at the top, a bar where the light is; the presets alongside
+                    val f = ((ct.k - ct.kmin).toFloat() / (ct.kmax - ct.kmin)).coerceIn(0f, 1f)
+                    BoxWithConstraints(Modifier.width(78.dp).height(170.dp).clip(RoundedCornerShape(24.dp))
+                        .background(Brush.verticalGradient(listOf(kColor(ct.kmax), kColor((ct.kmin + ct.kmax) / 2), kColor(ct.kmin))))
+                        .border(if (ct.on) 2.dp else 0.dp, if (ct.on) Amber else Color.Transparent, RoundedCornerShape(24.dp))) {
+                        val y = (maxHeight - 6.dp) * (1f - f)
+                        Box(Modifier.offset(y = y).padding(horizontal = 10.dp).fillMaxWidth().height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)).background(Ink.copy(alpha = .75f)))
+                    }
+                    Column(Modifier.height(170.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                        CT_PRESETS.indices.reversed().forEach { i ->
+                            val here = ctName(ct.k, ct.kmin, ct.kmax) == CT_PRESETS[i]
+                            Text(CT_PRESETS[i], color = if (here) Amber else white(.55f), fontSize = 11.sp,
+                                fontWeight = if (here) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+                }
             }
             // a group's parts under the slider: the highlighted one is what the slider sets
             if (parts.size > 1) Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1397,14 +1468,36 @@ private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emp
                         .padding(horizontal = 8.dp, vertical = 6.dp)) {
                         Text(if (i == 0) "All" else name, color = if (i == sel) Ink else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(if (p == 0) "Off" else "$p%", color = if (i == sel) Ink.copy(alpha = .6f) else white(.6f), fontSize = 9.sp)
+                        val k = ct?.parts?.getOrNull(i) ?: 0
+                        Text(if (ct != null && ct.on && k > 0) "${ctName(k, ct.kmin, ct.kmax)} ${k}K" else if (p == 0) "Off" else "$p%",
+                            color = if (i == sel) Ink.copy(alpha = .6f) else white(.6f), fontSize = 9.sp, maxLines = 1)
                     }
                 }
             }
-            Text((if (parts.size > 1) "◀ ▶ pick a light · " else "") + "▲ ▼ adjust · OK done", color = white(.5f), fontSize = 9.sp,
-                modifier = Modifier.padding(top = 12.dp))
+            Text((if (parts.size > 1) "◀ ▶ pick a light · " else "") + "▲ ▼ adjust · " +
+                (if (ct != null) "hold OK ${if (ct.on) "brightness" else "colour"} · " else "") + "OK done",
+                color = white(.5f), fontSize = 9.sp, modifier = Modifier.padding(top = 12.dp))
         }
     }
+}
+
+/** The colour pill's state: [on] = ▲ ▼ moves the colour; [parts] = each chip's kelvin (0 = no colour temperature). */
+private data class CtView(val on: Boolean, val k: Int, val kmin: Int, val kmax: Int, val parts: List<Int>)
+
+// Same names and spacing as the room card: four presets evenly over the light's range
+private val CT_PRESETS = listOf("Warm", "Soft", "Neutral", "Cool")
+private fun ctPreset(i: Int, kmin: Int, kmax: Int) = ((kmin + (kmax - kmin) * i / 3.0) / 100).roundToInt() * 100
+private fun ctName(k: Int, kmin: Int, kmax: Int): String =
+    CT_PRESETS[CT_PRESETS.indices.minByOrNull { kotlin.math.abs(ctPreset(it, kmin, kmax) - k) } ?: 0]
+
+/** Rough colour of white light at [k] kelvin (Tanner Helland's fit), for the colour pill. */
+private fun kColor(k: Int): Color {
+    val t = k / 100.0
+    val r = if (t <= 66) 255.0 else 329.698727446 * Math.pow(t - 60, -0.1332047592)
+    val g = if (t <= 66) 99.4708025861 * Math.log(t) - 161.1195681661 else 288.1221695283 * Math.pow(t - 60, -0.0755148492)
+    val b = if (t >= 66) 255.0 else if (t <= 19) 0.0 else 138.5177312231 * Math.log(t - 10) - 305.0447927307
+    fun c(v: Double) = v.coerceIn(0.0, 255.0).toInt()
+    return Color(c(r), c(g), c(b))
 }
 
 // ============================================================ live camera, extending out of the panel

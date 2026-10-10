@@ -41,7 +41,8 @@ data class CcCamera(val entity: String, val name: String, val image: String, val
  *  speaker (media_player) it is the volume 0-100, and holding OK opens the same slider as a volume control */
 data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1,
                   val members: List<CcTile> = emptyList(),   // a light group's own lights, shown when it is held
-                  val n: Int = 1)   // how many single lights this part is (Spotlights = 2): weights the group's average
+                  val n: Int = 1,   // how many single lights this part is (Spotlights = 2): weights the group's average
+                  val k: Int = 0, val kmin: Int = 0, val kmax: Int = 0)   // colour temperature now and the light's range (kelvin; 0 = none)
 data class CcCatchupItem(
     val id: String, val title: String, val sub: String, val img: String?, val badge: String?,
     val prog: Float?, val days: String, val detail: String,
@@ -170,7 +171,8 @@ data class ControlCenterSpec(
 
         private fun tile(it: JSONObject): CcTile =
             CcTile(it.optString("id"), it.optString("title"), it.optString("sub"), it.optString("icon", "lightbulb"), it.optBoolean("on"),
-                it.optInt("bri", -1), it.optJSONArray("members").objects().map { m -> tile(m) }, it.optInt("n", 1).coerceAtLeast(1))
+                it.optInt("bri", -1), it.optJSONArray("members").objects().map { m -> tile(m) }, it.optInt("n", 1).coerceAtLeast(1),
+                it.optInt("k", 0), it.optInt("kmin", 0), it.optInt("kmax", 0))
         private fun JSONObject.str(k: String): String? = optString(k, "").takeIf { it.isNotBlank() && it != "null" }
         private fun JSONArray?.objects(): List<JSONObject> =
             if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }
