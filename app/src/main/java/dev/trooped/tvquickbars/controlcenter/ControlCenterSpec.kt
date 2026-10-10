@@ -18,6 +18,8 @@ import org.json.JSONObject
  *   cameras       [{entity, name, image}], camera_status
  *   tiles         [{id, title, sub, icon, on}]
  *   catchup       [{section, items:[{id, title, sub, img, badge, prog, days, detail}]}]
+ *   rooms         [{id, name, floor, summary, devices:[tile], actions:[tile], temp:{now, low, low_at, high, high_at, hum, points:[°C]}}]
+ *                 Home Assistant's rooms (areas) for the Rooms page; a room with temp shows its 24-hour temperature.
  * Icons are names: a drawable "cc_<name>" (bundled MDI icons) or an existing drawable of that name.
  */
 data class CcNow(val label: String, val title: String, val sub: String, val image: String?)
@@ -27,7 +29,8 @@ data class CcNotification(
 )
 /** rtsp / rtspSub: Frigate's go2rtc restreams (full / lighter sub stream) for smooth video; blank = HA's MJPEG proxy */
 data class CcCamera(val entity: String, val name: String, val image: String, val rtsp: String = "", val rtspSub: String = "")
-/** bri: light brightness 0-100 (-1 when not a dimmable light), for the hold-OK brightness slider */
+/** bri: light brightness 0-100 (-1 when not a dimmable light), for the hold-OK brightness slider; on a TV or
+ *  speaker (media_player) it is the volume 0-100, and holding OK opens the same slider as a volume control */
 data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1,
                   val members: List<CcTile> = emptyList())   // a light group's own lights, shown when it is held
 data class CcCatchupItem(
@@ -40,6 +43,11 @@ data class CcCatchupItem(
     val tag: String = "",
 )
 data class CcSection(val title: String, val items: List<CcCatchupItem>)
+/** 24-hour temperature of a room (hourly averages in `points`, oldest first; low / high with their times) */
+data class CcTemp(val now: String, val low: String, val lowAt: String, val high: String, val highAt: String, val hum: String,
+                  val points: List<Float>)
+data class CcRoom(val id: String, val name: String, val floor: String, val summary: String,
+                  val devices: List<CcTile>, val actions: List<CcTile>, val temp: CcTemp?)
 
 data class ControlCenterSpec(
     val action: String,
@@ -51,6 +59,7 @@ data class ControlCenterSpec(
     val cameraStatus: String,
     val tiles: List<CcTile>,
     val catchup: List<CcSection>,
+    val rooms: List<CcRoom> = emptyList(),
 ) {
     companion object {
         fun parse(o: JSONObject): ControlCenterSpec = ControlCenterSpec(
@@ -86,7 +95,17 @@ data class ControlCenterSpec(
                     )
                 })
             },
+            rooms = o.optJSONArray("rooms").objects().map { room(it) },
         )
+
+        private fun room(r: JSONObject): CcRoom = CcRoom(
+            r.optString("id"), r.optString("name"), r.optString("floor"), r.optString("summary"),
+            r.optJSONArray("devices").objects().map { tile(it) }, r.optJSONArray("actions").objects().map { tile(it) },
+            r.optJSONObject("temp")?.let { t ->
+                val pts = t.optJSONArray("points"); val list = (0 until (pts?.length() ?: 0)).map { i -> pts!!.optDouble(i).toFloat() }
+                CcTemp(t.optString("now"), t.optString("low"), t.optString("low_at"), t.optString("high"), t.optString("high_at"),
+                    t.optString("hum"), list.filter { !it.isNaN() })
+            })
 
         private fun tile(it: JSONObject): CcTile =
             CcTile(it.optString("id"), it.optString("title"), it.optString("sub"), it.optString("icon", "lightbulb"), it.optBoolean("on"),

@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -35,6 +36,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -172,6 +178,7 @@ fun ControlCenterRoot(
     var page by remember(spec.page) { mutableStateOf(spec.page) }
     var catchupFrom by remember(spec.page) { mutableStateOf("notifications") }
     var openGroup by remember { mutableStateOf<String?>(null) }
+    var room by remember { mutableStateOf<String?>(null) }   // the room open on the "room" page
     var tvMenu by remember { mutableStateOf<CcCatchupItem?>(null) }   // hold-OK menu open on the TV page   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
     val dismissed = remember { mutableStateListOf<String>() }
     val notes = spec.notifications.filter { it.id !in dismissed }
@@ -186,7 +193,8 @@ fun ControlCenterRoot(
 
     fun back() { if (page == "home" && openGroup != null) { openGroup = null; return }
                  if (page == "catchup" && tvMenu != null) { tvMenu = null; return }
-                 page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"; else -> "close" }
+                 page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"
+                                      "room" -> "rooms"; "rooms" -> "home"; else -> "close" }
                  if (page == "close") onClose() }
     fun openNote(n: CcNotification) {
         when {
@@ -207,15 +215,19 @@ fun ControlCenterRoot(
     var dimPct by remember { mutableIntStateOf(0) }
     var dimSent by remember { mutableIntStateOf(-1) }
     var dimHeld by remember { mutableStateOf(false) }   // the OK that opened it is still held: ignore its release
+    // A TV or speaker held on the Rooms page opens the same slider as its volume ("vol:"), in steps of 2.
+    var dimVerb by remember { mutableStateOf("bright") }
+    val dimStep = if (dimVerb == "vol") 2 else 10
     fun pctOf(t: CcTile) = if (t.bri >= 0) t.bri else if (t.on) 100 else 0
     fun openDim(t: CcTile) {
         dimTargets = listOf(t) + t.members; dimSel = 0; dimPcts.clear(); dimTargets.forEach { dimPcts[it.id] = pctOf(it) }
+        dimVerb = if (t.id.startsWith("media_player.")) "vol" else "bright"
         dim = t; dimPct = pctOf(t); dimSent = dimPct; dimHeld = true
     }
     fun pickDim(i: Int) {
         val d = dim ?: return
         if (dimTargets.size < 2) return
-        if (dimPct != dimSent) onAction("bright:${d.id}:$dimPct")   // send the one being left at once
+        if (dimPct != dimSent) onAction("$dimVerb:${d.id}:$dimPct")   // send the one being left at once
         dimPcts[d.id] = dimPct
         dimSel = i.coerceIn(0, dimTargets.size - 1); val t = dimTargets[dimSel]
         dim = t; dimPct = dimPcts[t.id] ?: pctOf(t); dimSent = dimPct
@@ -223,7 +235,7 @@ fun ControlCenterRoot(
     LaunchedEffect(dimPct, dim) {
         val t = dim ?: return@LaunchedEffect
         if (dimPct == dimSent) return@LaunchedEffect
-        delay(300); dimSent = dimPct; onAction("bright:${t.id}:$dimPct")
+        delay(300); dimSent = dimPct; onAction("$dimVerb:${t.id}:$dimPct")
     }
 
     Box(
@@ -237,14 +249,14 @@ fun ControlCenterRoot(
                 } else if (dim != null) {
                     when {
                         e.type != KeyEventType.KeyDown && !(e.isOk() || e.key == Key.Back || e.key == Key.Escape) -> {}
-                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> dimPct = (dimPct + 10).coerceAtMost(100)
-                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> dimPct = (dimPct - 10).coerceAtLeast(0)
+                        e.key == Key.DirectionUp && e.type == KeyEventType.KeyDown -> dimPct = (dimPct + dimStep).coerceAtMost(100)
+                        e.key == Key.DirectionDown && e.type == KeyEventType.KeyDown -> dimPct = (dimPct - dimStep).coerceAtLeast(0)
                         e.key == Key.DirectionLeft && e.type == KeyEventType.KeyDown -> pickDim(dimSel - 1)
                         e.key == Key.DirectionRight && e.type == KeyEventType.KeyDown -> pickDim(dimSel + 1)
                         e.isOk() && dimHeld -> { if (e.type == KeyEventType.KeyUp) dimHeld = false }
                         (e.isOk() || e.key == Key.Back || e.key == Key.Escape) && e.type == KeyEventType.KeyUp -> {
                             // close; send the last value at once if the pause hadn't sent it yet
-                            if (dimPct != dimSent) { dimSent = dimPct; onAction("bright:${dim!!.id}:$dimPct") }
+                            if (dimPct != dimSent) { dimSent = dimPct; onAction("$dimVerb:${dim!!.id}:$dimPct") }
                             dim = null
                         }
                     }
@@ -253,13 +265,19 @@ fun ControlCenterRoot(
             }
     ) {
         // drawn before the panel so the panel overlaps its right edge: the camera looks like it extends out of it
-        live?.takeIf { page != "catchup" }?.let { e ->
+        live?.takeIf { page == "home" || page == "notifications" }?.let { e ->
             val cam = spec.cameras.firstOrNull { it.entity == e }
             LiveCamera(e, cam?.name ?: e.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() }, cam?.rtspSub ?: "",
                 Modifier.align(Alignment.BottomEnd).padding(end = 358.dp, bottom = 34.dp))
         }
         when (page) {
             "catchup" -> CatchupPage(spec, onAction = onAction, onClose = onClose, menu = tvMenu, onMenu = { tvMenu = it })
+            "rooms", "room" -> {
+                val r = spec.rooms.firstOrNull { it.id == room }
+                if (page == "room" && r != null) RoomPage(r, onAction = onAction, onDim = { openDim(it) })
+                else RoomsPage(spec.rooms, onOpen = { room = it; page = "room" }, from = room)
+                dim?.let { Dimmer(it.title, dimPct, dimTargets.map { t -> t.title to (if (t.id == it.id) dimPct else dimPcts[t.id] ?: 0) }, dimSel, volume = dimVerb == "vol") }
+            }
             else -> Box(
                 Modifier.align(Alignment.CenterEnd).padding(20.dp).width(350.dp).fillMaxHeight()
                     .graphicsLayer { translationX = slide * size.width * 1.1f }
@@ -269,7 +287,7 @@ fun ControlCenterRoot(
                 if (page == "notifications") NotificationsPage(notes, onBack = { back() }, onOpen = ::openNote, onDismiss = ::dismiss,
                     onClearAll = { notes.forEach { dismiss(it) }; page = "home" })
                 else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote,
-                    onCatchup = { catchupFrom = "home"; page = "catchup" },
+                    onCatchup = { catchupFrom = "home"; page = "catchup" }, onRooms = { room = null; page = "rooms" },
                     openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
                 dim?.let { Dimmer(it.title, dimPct, dimTargets.map { t -> t.title to (if (t.id == it.id) dimPct else dimPcts[t.id] ?: 0) }, dimSel) }
@@ -283,7 +301,7 @@ fun ControlCenterRoot(
 private fun HomePage(
     spec: ControlCenterSpec, notes: List<CcNotification>,
     onOpenStack: () -> Unit, onOpen: (CcNotification) -> Unit, onAction: (String) -> Unit, onCamera: (String) -> Unit,
-    onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {},
+    onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {}, onRooms: () -> Unit = {},
     openGroup: String? = null, onGroup: (String) -> Unit = {},
 ) {
     var clock by remember { mutableStateOf("") }
@@ -369,6 +387,19 @@ private fun HomePage(
                 Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                     cu.take(3).forEach { c -> key(c.id) { Net(c.img, Modifier.size(26.dp, 38.dp).clip(RoundedCornerShape(4.dp))) } }
                 }
+            }
+        }
+        // Rooms: every room's devices, like the main Home Assistant dashboard
+        if (spec.rooms.isNotEmpty()) Focusable(Modifier.fillMaxWidth().height(56.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
+            requester = if (notes.isEmpty() && spec.cameras.isEmpty() && spec.tiles.isEmpty() && spec.catchup.isEmpty()) first else null, onOk = onRooms) {
+            Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource(ccIcon("home_outline")), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(Amber))
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text("Rooms", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(spec.rooms.take(3).joinToString(" · ") { it.name } + (if (spec.rooms.size > 3) " · +${spec.rooms.size - 3}" else ""),
+                        color = white(.6f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text("›", color = white(.5f), fontSize = 18.sp)
             }
         }
         Spacer(Modifier.weight(1f))
@@ -664,19 +695,158 @@ private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: (
     }
 }
 
+// ============================================================ D5: Rooms (full screen), like the main HA dashboard
+@Composable
+private fun RoomsPage(rooms: List<CcRoom>, onOpen: (String) -> Unit, from: String? = null) {
+    // Rooms grouped by floor (in the order HA sends them), four to a row. OK opens a room; Back returns to the panel.
+    val reqs = remember(rooms) { rooms.associate { it.id to FocusRequester() } }
+    LaunchedEffect(Unit) { delay(60); runCatching { reqs[from ?: rooms.firstOrNull()?.id]?.requestFocus() } }
+    val floors = rooms.map { it.floor }.distinct()
+    Column(Modifier.fillMaxSize().background(Color(0xFF0D0A14)).padding(start = 52.dp, end = 52.dp, top = 26.dp, bottom = 14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
+            Text("Rooms", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
+        LazyColumn(Modifier.weight(1f).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(4.dp)) {
+            floors.forEach { fl ->
+                item(key = "f-$fl") { Text(fl.uppercase(), color = white(.55f), fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp)) }
+                rooms.filter { it.floor == fl }.chunked(4).forEachIndexed { ci, row ->
+                    item(key = "r-$fl-$ci") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            row.forEach { r -> key(r.id) {
+                                Focusable(Modifier.weight(1f).height(96.dp), RoundedCornerShape(18.dp), requester = reqs[r.id], onOk = { onOpen(r.id) }) {
+                                    Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 12.dp)) {
+                                        Text(r.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Spacer(Modifier.weight(1f))
+                                        r.temp?.let { t ->
+                                            Row(verticalAlignment = Alignment.Bottom) {
+                                                Text("${t.now}°", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                                                Text("  low ${t.low}° · high ${t.high}°", color = white(.65f), fontSize = 12.sp, modifier = Modifier.padding(bottom = 3.dp))
+                                            }
+                                        } ?: Text(r.summary, color = white(.65f), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                            } }
+                            repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            }
+        }
+        Text("◀ ▶ ▲ ▼ rooms · OK open · Back", color = white(.4f), fontSize = 11.sp)
+    }
+}
+
+/** One room: its devices as tiles (OK turns on / off; hold OK on a light for brightness, on a TV or speaker for volume),
+ *  the room's actions (scripts in that area), and for a room with a temperature sensor its last 24 hours. */
+@Composable
+private fun RoomPage(r: CcRoom, onAction: (String) -> Unit, onDim: (CcTile) -> Unit) {
+    val first = remember(r.id) { FocusRequester() }
+    var hasFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(r.id) { delay(60); runCatching { first.requestFocus() } }
+    Column(Modifier.fillMaxSize().background(Color(0xFF0D0A14)).padding(start = 52.dp, end = 52.dp, top = 26.dp, bottom = 14.dp)
+        .onFocusChanged { hasFocus = it.hasFocus }.then(if (r.devices.isEmpty() && r.actions.isEmpty()) Modifier.focusRequester(first).focusable() else Modifier),
+        verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
+            Text("Rooms · ", color = white(.55f), fontSize = 14.sp)
+            Text(r.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
+        r.temp?.let { t ->
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf(Triple("Now", "${t.now}°", Color.White), Triple("Lowest · ${t.lowAt}", "${t.low}°", Color(0xFF7FB8FF)),
+                    Triple("Highest · ${t.highAt}", "${t.high}°", Amber), Triple("Humidity", if (t.hum.isBlank()) "–" else "${t.hum}%", Color.White)).forEach { (l, v, c) ->
+                    Column(Modifier.weight(1f).clip(RoundedCornerShape(18.dp)).background(white(.10f)).padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        Text(l, color = white(.65f), fontSize = 12.sp, maxLines = 1)
+                        Text(v, color = c, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            if (t.points.size > 1) Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(white(.06f)).padding(16.dp)) {
+                Text("Last 24 hours", color = white(.75f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                TempChart(t.points, Modifier.fillMaxWidth().height(170.dp).padding(top = 10.dp))
+                Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+                    Text("24 h ago", color = white(.5f), fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    Text("12 h ago", color = white(.5f), fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    Text("now", color = white(.5f), fontSize = 11.sp)
+                }
+            }
+        }
+        if (r.devices.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            r.devices.chunked(4).forEachIndexed { ci, row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEachIndexed { i, d -> key(d.id) {
+                        RoomTile(d, requester = if (ci == 0 && i == 0) first else null, onAction = onAction,
+                            onLong = if (d.bri >= 0 && (d.id.startsWith("light.") || d.id.startsWith("media_player."))) ({ onDim(d) }) else null)
+                    } }
+                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+        if (r.actions.isNotEmpty()) {
+            Text("ACTIONS", color = white(.55f), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                r.actions.forEachIndexed { i, a -> key(a.id) {
+                    Focusable(Modifier.height(44.dp), RoundedCornerShape(14.dp), requester = if (r.devices.isEmpty() && i == 0) first else null,
+                        onOk = { onAction("room:run:${a.id}") }) {
+                        Text(a.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.align(Alignment.Center).padding(horizontal = 18.dp))
+                    }
+                } }
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Text(if (r.devices.isEmpty() && r.actions.isEmpty()) "Back" else "OK on / off · hold OK brightness or volume · Back", color = white(.4f), fontSize = 11.sp)
+    }
+}
+
+/** A device in a room. Flips at once on OK and falls back to HA's state if it didn't follow within 4 s (as QuickTile). */
+@Composable
+private fun RowScope.RoomTile(d: CcTile, requester: FocusRequester?, onAction: (String) -> Unit, onLong: (() -> Unit)?) {
+    var on by remember(d.on) { mutableStateOf(d.on) }
+    LaunchedEffect(on, d.on) { if (on != d.on) { delay(4_000); on = d.on } }
+    Focusable(Modifier.weight(1f).height(100.dp), RoundedCornerShape(18.dp),
+        bg = if (on) white(.92f) else white(.10f), focusedBg = if (on) Color.White else white(.22f),
+        requester = requester, onLong = onLong, onOk = { on = !on; onAction("room:toggle:${d.id}") }) {
+        Column(Modifier.fillMaxSize().padding(12.dp)) {
+            Image(painterResource(ccIcon(d.icon)), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(if (on) Color(0xFFF59E0B) else Color.White))
+            Spacer(Modifier.weight(1f))
+            Text(d.title, color = if (on) Ink else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (d.sub.isNotBlank()) Text(d.sub, color = if (on) Ink.copy(alpha = .6f) else white(.6f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** Hourly temperatures as a line with a soft fill; the lowest point blue, the highest amber, now white. */
+@Composable
+private fun TempChart(pts: List<Float>, modifier: Modifier) {
+    val lo = pts.min(); val hi = pts.max(); val pad = ((hi - lo) * .15f).coerceAtLeast(.5f)
+    val min = lo - pad; val max = hi + pad
+    Canvas(modifier) {
+        fun at(i: Int) = Offset(size.width * i / (pts.size - 1), size.height * (1 - (pts[i] - min) / (max - min)))
+        val line = Path().apply { pts.indices.forEach { i -> val o = at(i); if (i == 0) moveTo(o.x, o.y) else lineTo(o.x, o.y) } }
+        val fill = Path().apply { addPath(line); lineTo(size.width, size.height); lineTo(0f, size.height); close() }
+        drawPath(fill, Amber.copy(alpha = .14f))
+        drawPath(line, Amber, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawCircle(Color(0xFF7FB8FF), 6.dp.toPx(), at(pts.indexOf(lo)))
+        drawCircle(Amber, 6.dp.toPx(), at(pts.indexOf(hi)))
+        drawCircle(Color.White, 6.dp.toPx(), at(pts.size - 1))
+    }
+}
+
 // ============================================================ brightness slider (hold OK on a light tile)
 @Composable
-private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emptyList(), sel: Int = 0) {
+private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emptyList(), sel: Int = 0, volume: Boolean = false) {
     Box(Modifier.fillMaxSize().background(Color(0xE6140F22)), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            Text(if (pct == 0) "Off" else "$pct%", color = Amber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+            Text(if (volume) "Volume $pct" else if (pct == 0) "Off" else "$pct%", color = Amber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(top = 2.dp, bottom = 12.dp))
             // tall pill like the iOS Control Centre brightness slider; the lit part grows from the bottom
             Box(Modifier.width(78.dp).height(170.dp).clip(RoundedCornerShape(24.dp)).background(white(.14f)),
                 contentAlignment = Alignment.BottomCenter) {
                 Box(Modifier.fillMaxWidth().fillMaxHeight(pct / 100f).background(Color(0xFFF5F2FA)))
-                Image(painterResource(ccIcon("lightbulb")), null, Modifier.padding(bottom = 14.dp).size(24.dp),
+                Image(painterResource(ccIcon(if (volume) "speaker" else "lightbulb")), null, Modifier.padding(bottom = 14.dp).size(24.dp),
                     colorFilter = ColorFilter.tint(if (pct >= 15) Color(0xFFF59E0B) else Color.White))
             }
             // a group's parts under the slider: the highlighted one is what the slider sets
