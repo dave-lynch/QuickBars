@@ -49,7 +49,7 @@ class ControlCenterController(
         when (s.action) {
             "close" -> close()
             // Update only what was sent (e.g. just "tiles" after a press), keep the page the user is on
-            "update" -> spec.value?.let { cur -> if (view != null) spec.value = cur.copy(
+            "update" -> spec.value?.let { cur -> spec.value = cur.copy(   // also while closed: keeps the next open's carried-over parts fresh
                 subtitle = if (data.has("subtitle")) s.subtitle else cur.subtitle,
                 now = if (data.has("now")) s.now else cur.now,
                 notifications = if (data.has("notifications")) s.notifications else cur.notifications,
@@ -60,7 +60,17 @@ class ControlCenterController(
                 rooms = if (data.has("rooms")) s.rooms else cur.rooms,
                 meals = if (data.has("meals")) s.meals else cur.meals,
             ) }
-            else -> { spec.value = s; if (view == null) show() else { close(); spec.value = s; show() } }
+            // Open: HA sends the quick parts at once and the slow ones (notifications, catch-up, rooms) a moment later as an
+            // "update", so keep showing the last ones we had meanwhile instead of an empty space
+            else -> {
+                val last = spec.value
+                val s2 = if (last == null) s else s.copy(
+                    notifications = if (data.has("notifications")) s.notifications else last.notifications,
+                    catchup = if (data.has("catchup")) s.catchup else last.catchup,
+                    rooms = if (data.has("rooms")) s.rooms else last.rooms,
+                )
+                spec.value = s2; if (view == null) show() else { close(); spec.value = s2; show() }
+            }
         }
         bumpIdle()
     }
