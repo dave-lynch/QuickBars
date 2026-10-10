@@ -183,6 +183,8 @@ fun ControlCenterRoot(
     // Kitchen > Dinners & shopping: tab, the night being changed (dinner picker), the item whose quantity is being set, and
     // presses shown at once until HA's update arrives (cleared whenever new meals data comes in)
     var mealTab by remember { mutableIntStateOf(0) }
+    var mealsFrom by remember { mutableStateOf("room") }   // Back from Dinners & shopping: the Kitchen room, or the notifications
+    var noteMenu by remember { mutableStateOf<CcNotification?>(null) }   // hold OK on a notification
     var mealPick by remember { mutableStateOf<CcMealNight?>(null) }
     var mealQty by remember { mutableStateOf<CcShopItem?>(null) }
     var mealQtyVal by remember { mutableIntStateOf(1) }
@@ -203,11 +205,13 @@ fun ControlCenterRoot(
     fun back() { if (page == "home" && openGroup != null) { openGroup = null; return }
                  if (page == "catchup" && tvMenu != null) { tvMenu = null; return }
                  if (page == "meals" && mealPick != null) { mealPick = null; return }
+                 if (noteMenu != null) { noteMenu = null; return }
                  page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"
-                                      "room" -> "rooms"; "rooms" -> "home"; "meals" -> "room"; else -> "close" }
+                                      "room" -> "rooms"; "rooms" -> "home"; "meals" -> mealsFrom; else -> "close" }
                  if (page == "close") onClose() }
     fun openNote(n: CcNotification) {
         when {
+            n.open == "page:meals" -> { mealsFrom = page; mealTab = 0; onAction("meals:open"); page = "meals" }
             n.open.startsWith("page:") -> { catchupFrom = page; page = n.open.removePrefix("page:") }
             n.open.startsWith("camera:") -> live = n.open.removePrefix("camera:")
             else -> { onAction("notif_open:${n.id}"); onClose() }
@@ -305,7 +309,7 @@ fun ControlCenterRoot(
             "rooms", "room" -> {
                 val r = spec.rooms.firstOrNull { it.id == room }
                 if (page == "room" && r != null) RoomPage(r, onAction = onAction, onDim = { openDim(it) },
-                    onPage = { pg -> if (pg == "meals") { mealTab = 0; onAction("meals:open") }; page = pg })
+                    onPage = { pg -> if (pg == "meals") { mealsFrom = "room"; mealTab = 0; onAction("meals:open") }; page = pg })
                 else RoomsPage(spec.rooms, onOpen = { room = it; page = "room" }, from = room)
                 dim?.let { Dimmer(it.title, dimPct, dimTargets.map { t -> t.title to (if (t.id == it.id) dimPct else dimPcts[t.id] ?: 0) }, dimSel, volume = dimVerb == "vol") }
             }
@@ -315,13 +319,19 @@ fun ControlCenterRoot(
                     .clip(RoundedCornerShape(26.dp)).background(PanelBrush)
                     .border(1.dp, white(.12f), RoundedCornerShape(26.dp))
             ) {
-                if (page == "notifications") NotificationsPage(notes, onBack = { back() }, onOpen = ::openNote, onDismiss = ::dismiss,
+                if (page == "notifications") NotificationsPage(notes, onBack = { back() }, onOpen = ::openNote, onDismiss = ::dismiss, onMenu = { noteMenu = it },
                     onClearAll = { notes.forEach { dismiss(it) }; page = "home" })
-                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote,
+                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote, onMenu = { noteMenu = it },
                     onCatchup = { catchupFrom = "home"; page = "catchup" }, onRooms = { room = null; page = "rooms" },
                     openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
                 dim?.let { Dimmer(it.title, dimPct, dimTargets.map { t -> t.title to (if (t.id == it.id) dimPct else dimPcts[t.id] ?: 0) }, dimSel) }
+                noteMenu?.let { n -> NoteMenu(n, onPick = { a -> noteMenu = null
+                    when (a) {
+                        "dismiss" -> dismiss(n)
+                        "meals" -> { mealsFrom = page; mealTab = 0; onAction("meals:open"); page = "meals" }
+                        else -> { dismissed += n.id; onAction("notif_act:${n.id}:$a") }
+                    } }) }
             }
         }
     }
@@ -331,7 +341,7 @@ fun ControlCenterRoot(
 @Composable
 private fun HomePage(
     spec: ControlCenterSpec, notes: List<CcNotification>,
-    onOpenStack: () -> Unit, onOpen: (CcNotification) -> Unit, onAction: (String) -> Unit, onCamera: (String) -> Unit,
+    onOpenStack: () -> Unit, onOpen: (CcNotification) -> Unit, onAction: (String) -> Unit, onCamera: (String) -> Unit, onMenu: (CcNotification) -> Unit = {},
     onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {}, onRooms: () -> Unit = {},
     openGroup: String? = null, onGroup: (String) -> Unit = {},
 ) {
@@ -372,7 +382,7 @@ private fun HomePage(
             if (notes.size > 2) Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 18.dp).fillMaxWidth().height(20.dp).clip(RoundedCornerShape(12.dp)).background(white(.06f)))
             if (notes.size > 1) Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 9.dp).offset(y = (-6).dp).fillMaxWidth().height(20.dp).clip(RoundedCornerShape(13.dp)).background(white(.10f)))
             Focusable(Modifier.fillMaxWidth().height(80.dp), RoundedCornerShape(14.dp), bg = Color(0xFF332B45), focusedBg = Color(0xFF443A5A),
-                requester = first, onOk = { if (notes.size == 1) onOpen(notes[0]) else onOpenStack() }) {
+                requester = first, onLong = { onMenu(notes[0]) }, onOk = { if (notes.size == 1) onOpen(notes[0]) else onOpenStack() }) {
                 NoteBody(notes[0], compact = true)
             }
         }
@@ -487,7 +497,7 @@ private fun NoteBody(n: CcNotification, compact: Boolean) {
 @Composable
 private fun NotificationsPage(
     notes: List<CcNotification>, onBack: () -> Unit, onOpen: (CcNotification) -> Unit,
-    onDismiss: (CcNotification) -> Unit, onClearAll: () -> Unit,
+    onDismiss: (CcNotification) -> Unit, onClearAll: () -> Unit, onMenu: (CcNotification) -> Unit = {},
 ) {
     val first = remember { FocusRequester() }
     var hasFocus by remember { mutableStateOf(false) }
@@ -511,10 +521,10 @@ private fun NotificationsPage(
                     onKey = { e -> if ((e.key == Key.DirectionLeft || e.key == Key.DirectionRight) && e.type == KeyEventType.KeyDown && e.nativeKeyEvent.isLongPress.not()) {
                         // Left / right dismisses (like swiping a notification away); keep focus on the list
                         onDismiss(n); true } else false },
-                    onOk = { onOpen(n) }) { NoteBody(n, compact = false) }
+                    onLong = { onMenu(n) }, onOk = { onOpen(n) }) { NoteBody(n, compact = false) }
             }
         }
-        Text("OK open · ◀ ▶ dismiss · Back", color = white(.35f), fontSize = 8.sp, modifier = Modifier.padding(top = 6.dp))
+        Text("OK open · hold OK for options · ◀ ▶ dismiss · Back", color = white(.35f), fontSize = 8.sp, modifier = Modifier.padding(top = 6.dp))
     }
 }
 
@@ -865,6 +875,28 @@ private fun TempChart(pts: List<Float>, modifier: Modifier) {
     }
 }
 
+
+/** Hold OK on a notification: Open / Dismiss (TV only) plus what HA offers for it (Open Dinners & shopping, Ignore everywhere,
+ *  Not in the house: remove the item). Drawn over the panel; Back closes it. */
+@Composable
+private fun NoteMenu(n: CcNotification, onPick: (String) -> Unit) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(n.id) { delay(60); runCatching { first.requestFocus() } }
+    val opts = n.actions + ("dismiss" to "Dismiss on the TV")
+    Box(Modifier.fillMaxSize().background(Color(0xE6140F22)).padding(14.dp), contentAlignment = Alignment.Center) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(n.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(n.app, color = white(.55f), fontSize = 10.sp, modifier = Modifier.padding(bottom = 4.dp))
+            opts.forEachIndexed { i, (id, label) ->
+                Focusable(Modifier.fillMaxWidth().height(40.dp), RoundedCornerShape(12.dp), requester = if (i == 0) first else null, onOk = { onPick(id) }) {
+                    Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp))
+                }
+            }
+            Text("OK choose · Back cancel", color = white(.4f), fontSize = 9.sp)
+        }
+    }
+}
 // ============================================================ Kitchen > Dinners & shopping (a TV-only draft in HA)
 /** Three tabs: the nights the next order covers (OK changes a night's dinner), the suggested shopping by section (OK ticks an item
  *  in or out, hold OK sets the quantity) and the total. Everything comes from HA (tv_meals.py); presses go back as meals:<...>. */

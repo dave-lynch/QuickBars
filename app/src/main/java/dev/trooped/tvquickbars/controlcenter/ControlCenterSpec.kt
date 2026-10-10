@@ -32,6 +32,8 @@ data class CcNow(val label: String, val title: String, val sub: String, val imag
 data class CcNotification(
     val id: String, val app: String, val icon: String, val color: Long, val whenText: String,
     val title: String, val body: String, val thumbs: List<String>, val open: String,
+    /** hold OK: [id, label] the menu offers besides Dismiss (TV only): e.g. meals, ignore (clear it everywhere), remove (use-by) */
+    val actions: List<Pair<String, String>> = emptyList(),
 )
 /** rtsp / rtspSub: Frigate's go2rtc restreams (full / lighter sub stream) for smooth video; blank = HA's MJPEG proxy */
 data class CcCamera(val entity: String, val name: String, val image: String, val rtsp: String = "", val rtspSub: String = "")
@@ -93,6 +95,7 @@ data class ControlCenterSpec(
                     color = parseColor(it.optString("color"), 0xFFF59E0B), whenText = it.optString("when"),
                     title = it.optString("title"), body = it.optString("body"),
                     thumbs = it.optJSONArray("thumbs").strings(), open = it.optString("open", "action"),
+                    actions = it.optJSONArray("actions").objects().map { a -> a.optString("id") to a.optString("label") }.filter { a -> a.first.isNotBlank() },
                 )
             },
             cameras = o.optJSONArray("cameras").objects().map {
