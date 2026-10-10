@@ -14,6 +14,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -384,8 +386,10 @@ private fun HomePage(
     // the first item still on screen so the remote keeps working, without stealing it otherwise.
     LaunchedEffect(notes.isEmpty(), spec.cameras.size, spec.tiles.size, openGroup) { delay(120); if (!hasFocus) runCatching { first.requestFocus() } }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp).onFocusChanged { hasFocus = it.hasFocus },
-        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    // Scrolls when everything doesn't fit (now playing + notifications + cameras + tiles + TV / Rooms): moving focus down
+    // brings the next row into view, so nothing at the bottom is ever cut off. The key hint stays pinned below.
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp).onFocusChanged { hasFocus = it.hasFocus }) {
+    Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(clock, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
         if (spec.subtitle.isNotBlank()) Text(spec.subtitle, color = white(.65f), fontSize = 14.sp, modifier = Modifier.offset(y = (-8).dp))
         spec.now?.let { n ->
@@ -444,7 +448,9 @@ private fun HomePage(
         }
         // TV: always here, so clearing notifications never loses the guide's catch-up picks
         val cu = spec.catchup.flatMap { it.items }
-        if (cu.isNotEmpty()) Focusable(Modifier.fillMaxWidth().height(68.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
+        // TV and Rooms share one row (each half width), so both fit under the cameras and tiles
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (cu.isNotEmpty()) Focusable(Modifier.weight(1f).height(68.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
             requester = if (notes.isEmpty() && spec.cameras.isEmpty() && spec.tiles.isEmpty()) first else null, onOk = onCatchup) {
             Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("television_play")), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(Amber))
@@ -454,12 +460,12 @@ private fun HomePage(
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    cu.take(3).forEach { c -> key(c.id) { Net(c.img, Modifier.size(26.dp, 38.dp).clip(RoundedCornerShape(4.dp))) } }
+                    cu.take(2).forEach { c -> key(c.id) { Net(c.img, Modifier.size(24.dp, 36.dp).clip(RoundedCornerShape(4.dp))) } }
                 }
             }
         }
         // Rooms: every room's devices, like the main Home Assistant dashboard
-        if (spec.rooms.isNotEmpty()) Focusable(Modifier.fillMaxWidth().height(56.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
+        if (spec.rooms.isNotEmpty()) Focusable(Modifier.weight(1f).height(68.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
             requester = if (notes.isEmpty() && spec.cameras.isEmpty() && spec.tiles.isEmpty() && spec.catchup.isEmpty()) first else null, onOk = onRooms) {
             Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("home_outline")), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(Amber))
@@ -471,8 +477,9 @@ private fun HomePage(
                 Text("›", color = white(.5f), fontSize = 18.sp)
             }
         }
-        Spacer(Modifier.weight(1f))
-        Text("OK open · hold OK brightness · Back close", color = white(.35f), fontSize = 11.sp, maxLines = 1)
+        }
+    }
+        Text("OK open · hold OK brightness · Back close", color = white(.35f), fontSize = 11.sp, maxLines = 1, modifier = Modifier.padding(top = 6.dp))
     }
 }
 
