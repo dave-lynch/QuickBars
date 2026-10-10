@@ -65,8 +65,14 @@ data class CcShopItem(val id: String, val name: String, val sub: String, val q: 
 data class CcShopSection(val id: String, val title: String, val note: String, val count: Int, val sub: String, val items: List<CcShopItem>)
 data class CcMealTotal(val amount: String, val items: Int, val dinners: Int, val usual: String, val unpriced: Int,
                        val removed: List<String>, val removedN: Int)
+// Search / add on Review shopping (voice or typed): what is already on the list, then products from past orders / the Dunnes
+// catalogue (the phone's Add box ranking, worked out in tv_meals.py). looking = the live Dunnes lookup is still running.
+data class CcFindOn(val id: String, val name: String, val where: String, val on: Boolean)
+data class CcFindHit(val i: Int, val name: String, val priceTxt: String, val src: String, val added: Boolean)
+data class CcFind(val q: String, val on: List<CcFindOn>, val hits: List<CcFindHit>, val looking: Boolean)
 data class CcMeals(val window: String, val nights: List<CcMealNight>, val choices: List<CcMealChoice>,
-                   val sections: List<CcShopSection>, val total: CcMealTotal, val draft: Boolean, val note: String)
+                   val sections: List<CcShopSection>, val total: CcMealTotal, val draft: Boolean, val note: String,
+                   val find: CcFind? = null)
 
 data class ControlCenterSpec(
     val action: String,
@@ -143,6 +149,12 @@ data class ControlCenterSpec(
                 total = CcMealTotal(t.optString("amount"), t.optInt("items"), t.optInt("dinners"), t.optString("usual"), t.optInt("unpriced"),
                     t.optJSONArray("removed").strings(), t.optInt("removed_n")),
                 draft = m.optBoolean("draft"), note = m.optString("note"),
+                find = m.optJSONObject("find")?.let { f ->
+                    CcFind(f.optString("q"),
+                        f.optJSONArray("on").objects().map { CcFindOn(it.optString("id"), it.optString("name"), it.optString("where"), it.optBoolean("on")) },
+                        f.optJSONArray("hits").objects().map { CcFindHit(it.optInt("i"), it.optString("name"), it.optString("price_txt"), it.optString("src"), it.optBoolean("added")) },
+                        f.optBoolean("looking"))
+                },
             )
         }
 

@@ -544,6 +544,16 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
         val keyCodeRaw = event?.keyCode ?: return super.onKeyEvent(event)
         val keyCode = normalizeConfirm(keyCodeRaw)
 
+        // Control Center voice search (Kitchen > Dinners & shopping open): the remote's mic button searches the shopping
+        // instead of opening Google Assistant. With that page closed the button works as normal.
+        if (keyCodeRaw == KeyEvent.KEYCODE_SEARCH || keyCodeRaw == KeyEvent.KEYCODE_VOICE_ASSIST) {
+            val h = dev.trooped.tvquickbars.controlcenter.CcVoice.keyHandler
+            if (h != null) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) android.os.Handler(android.os.Looper.getMainLooper()).post { h() }
+                return true
+            }
+        }
+
         // 1) Overlay visible?
         if (overlayView != null && (keyCode == KeyEvent.KEYCODE_BACK || keyCode == overlayOwnerKeyCode)) {
             return handleOverlayWhileVisible(event, keyCode)

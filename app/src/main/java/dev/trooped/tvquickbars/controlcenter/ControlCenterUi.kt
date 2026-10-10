@@ -5,6 +5,10 @@ import android.content.Context
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -190,7 +194,15 @@ fun ControlCenterRoot(
     var mealQtyVal by remember { mutableIntStateOf(1) }
     var mealQtyHeld by remember { mutableStateOf(false) }
     val shopOv = remember { mutableStateMapOf<String, Pair<Boolean, Int>>() }
-    LaunchedEffect(spec.meals) { shopOv.clear() }   // hold-OK menu open on the TV page   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
+    LaunchedEffect(spec.meals) { shopOv.clear() }
+    // Voice / search on Review shopping: the words sent (shown as "Searching…" until HA's results arrive) and Back's local hide
+    val ctx = LocalContext.current
+    val voice by CcVoice.ui
+    var findSent by remember { mutableStateOf("") }
+    var findHide by remember { mutableStateOf(false) }
+    val find = spec.meals?.find?.takeIf { !findHide }
+    LaunchedEffect(spec.meals?.find?.q) { if (spec.meals?.find != null) { findHide = false; if (spec.meals.find.q == findSent) findSent = "" } }
+    LaunchedEffect(voice.error) { if (voice.error.isNotEmpty()) { delay(5000); CcVoice.clearError() } }   // hold-OK menu open on the TV page   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
     val dismissed = remember { mutableStateListOf<String>() }
     val notes = spec.notifications.filter { it.id !in dismissed }
     var shown by remember { mutableStateOf(false) }
@@ -202,7 +214,21 @@ fun ControlCenterRoot(
     var live by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(live) { while (live != null) { onKeepAlive(); delay(30_000) } }   // watching isn't "idle"
 
+    fun listen() {
+        if (page != "meals") return
+        mealTab = 1
+        CcVoice.start(ctx) { t -> val q = cleanSpoken(t); if (q.isNotBlank()) { findHide = false; findSent = q; onAction("meals:find:$q") } }
+    }
+    val listenNow = rememberUpdatedState { listen() }
+    DisposableEffect(page) {
+        CcVoice.keyHandler = if (page == "meals") ({ listenNow.value() }) else null
+        onDispose { CcVoice.keyHandler = null; if (CcVoice.ui.value.listening) CcVoice.cancel() }
+    }
+    fun closeFind() { findHide = true; findSent = ""; onAction("meals:find:") }
+
     fun back() { if (page == "home" && openGroup != null) { openGroup = null; return }
+                 if (page == "meals" && voice.listening) { CcVoice.cancel(); return }
+                 if (page == "meals" && mealTab == 1 && (find != null || findSent.isNotEmpty())) { closeFind(); return }
                  if (page == "catchup" && tvMenu != null) { tvMenu = null; return }
                  if (page == "meals" && mealPick != null) { mealPick = null; return }
                  if (noteMenu != null) { noteMenu = null; return }
@@ -302,7 +328,9 @@ fun ControlCenterRoot(
             "catchup" -> CatchupPage(spec, onAction = onAction, onClose = onClose, menu = tvMenu, onMenu = { tvMenu = it })
             "meals" -> {
                 MealsPage(spec.meals, tab = mealTab, onTab = { mealTab = it }, onAction = onAction, overrides = shopOv,
-                    onPick = { mealPick = it }, onQty = { i -> mealQty = i; mealQtyVal = shopOv[i.id]?.second ?: i.q; mealQtyHeld = true })
+                    onPick = { mealPick = it }, onQty = { i -> mealQty = i; mealQtyVal = shopOv[i.id]?.second ?: i.q; mealQtyHeld = true },
+                    find = find, searching = findSent, onVoice = { listen() }, onCloseFind = { closeFind() })
+                VoiceBubble(voice, Modifier.align(Alignment.TopCenter).padding(top = 70.dp))
                 mealPick?.let { n -> MealPicker(n, spec.meals?.choices ?: emptyList(), onPick = { v -> onAction("meals:set:${n.date}:$v"); mealPick = null }) }
                 mealQty?.let { i -> QtyPopup(i.name, mealQtyVal, i.price) }
             }
@@ -904,6 +932,7 @@ private fun NoteMenu(n: CcNotification, onPick: (String) -> Unit) {
 private fun MealsPage(
     m: CcMeals?, tab: Int, onTab: (Int) -> Unit, onAction: (String) -> Unit, overrides: Map<String, Pair<Boolean, Int>>,
     onPick: (CcMealNight) -> Unit, onQty: (CcShopItem) -> Unit,
+    find: CcFind? = null, searching: String = "", onVoice: () -> Unit = {}, onCloseFind: () -> Unit = {},
 ) {
     val tabs = listOf("Dinners", "Review shopping", "Total")
     val tabReq = remember { tabs.map { FocusRequester() } }
@@ -933,13 +962,15 @@ private fun MealsPage(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
                 0 -> MealNights(m, onPick = onPick, onNext = { onTab(1) })
-                1 -> ShopReview(m, overrides, onAction = onAction, onQty = onQty, onNext = { onTab(2) })
+                1 -> ShopReview(m, overrides, onAction = onAction, onQty = onQty, onNext = { onTab(2) },
+                    find = find, searching = searching, onVoice = onVoice, onCloseFind = onCloseFind)
                 else -> ShopTotal(m, overrides, onAction = onAction)
             }
         }
         Text(m.note + "  ·  " + when (tab) {
             0 -> "▲ ▼ nights · OK pick a different dinner · Back"
-            1 -> "OK tick in or out · hold OK quantity · Back"
+            1 -> if (find != null || searching.isNotEmpty()) "OK add to this order · mic button: search again · Back closes the search"
+                 else "OK tick in or out · hold OK quantity · mic button: add by voice · Back"
             else -> "Back"
         }, color = white(.4f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -1020,7 +1051,8 @@ private fun Badge(t: String) {
 private fun eur(v: Double) = "€" + String.format(Locale.UK, "%.2f", v)
 
 @Composable
-private fun ShopReview(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction: (String) -> Unit, onQty: (CcShopItem) -> Unit, onNext: () -> Unit) {
+private fun ShopReview(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction: (String) -> Unit, onQty: (CcShopItem) -> Unit, onNext: () -> Unit,
+                       find: CcFind? = null, searching: String = "", onVoice: () -> Unit = {}, onCloseFind: () -> Unit = {}) {
     var sec by remember { mutableStateOf(m.sections.firstOrNull { it.id == "week" }?.id ?: m.sections.firstOrNull()?.id) }
     val secReq = remember(m.sections.size) { m.sections.map { FocusRequester() } }
     LaunchedEffect(Unit) { delay(80); runCatching { secReq[m.sections.indexOfFirst { it.id == sec }.coerceAtLeast(0)].requestFocus() } }
@@ -1051,10 +1083,12 @@ private fun ShopReview(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction
         }
         val s = m.sections.firstOrNull { it.id == sec }
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            if (s != null) {
-                Row(verticalAlignment = Alignment.Bottom) {
+            if (find != null || searching.isNotEmpty()) FindResults(m, find, searching, ov, onAction = onAction, onVoice = onVoice, onClose = onCloseFind)
+            else if (s != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(s.title, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    Text("  " + s.note, color = white(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("  " + s.note, color = white(.55f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Pill("microphone", "Add by voice", onVoice)
                 }
                 if (s.items.isEmpty()) Text("Nothing here this week.", color = white(.6f), fontSize = 14.sp, modifier = Modifier.padding(top = 16.dp))
                 LazyColumn(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp), contentPadding = PaddingValues(3.dp)) {
@@ -1080,6 +1114,108 @@ private fun ShopReview(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction
                     }
                 }
             }
+        }
+    }
+}
+
+/** Spoken words -> a search: lower case, letters / digits / & / -, no "add" / "please", at most 40 characters (as HA accepts). */
+private fun cleanSpoken(t: String): String =
+    t.lowercase(Locale.UK).replace(Regex("[^a-z0-9 &-]"), " ").replace(Regex("^\\s*(please\\s+)?(add|search for|search|find|get|buy)\\s+(some\\s+)?"), "")
+        .replace(Regex("\\s+(please|to the list|to my list)\\s*$"), "").replace(Regex("\\s+"), " ").trim().take(40).trim()
+
+@Composable
+private fun Pill(icon: String, label: String, onOk: () -> Unit, requester: FocusRequester? = null) {
+    Focusable(Modifier.padding(start = 8.dp).height(34.dp), RoundedCornerShape(17.dp), bg = white(.12f), focusedBg = Amber, requester = requester, onOk = onOk) { f ->
+        Row(Modifier.align(Alignment.Center).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(ccIcon(icon)), null, Modifier.size(16.dp), colorFilter = ColorFilter.tint(if (f) Ink else Color.White))
+            Text(" $label", color = if (f) Ink else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/** Listening / heard / error card over the meals page while voice search runs. */
+@Composable
+private fun VoiceBubble(v: CcVoice.Ui, modifier: Modifier) {
+    if (!v.listening && v.error.isEmpty()) return
+    Row(modifier.clip(RoundedCornerShape(28.dp)).background(Color(0xF21C1828)).border(1.dp, white(.2f), RoundedCornerShape(28.dp))
+        .padding(horizontal = 22.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        val pulse by rememberInfiniteTransition(label = "mic").animateFloat(.55f, 1f, infiniteRepeatable(tween(650), RepeatMode.Reverse), label = "micA")
+        Box(Modifier.size(40.dp).clip(RoundedCornerShape(20.dp)).background(if (v.error.isEmpty()) Amber.copy(alpha = pulse) else white(.15f)), contentAlignment = Alignment.Center) {
+            Image(painterResource(ccIcon("microphone")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(if (v.error.isEmpty()) Ink else Color.White))
+        }
+        Column(Modifier.padding(start = 14.dp)) {
+            Text(if (v.error.isNotEmpty()) v.error else if (v.heard.isNotBlank()) "“${v.heard}”" else "Listening… say a product, e.g. cheddar",
+                color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(if (v.error.isNotEmpty()) "Back to close" else "Back to cancel", color = white(.55f), fontSize = 11.sp)
+        }
+    }
+}
+
+/** Search results on Review shopping: what is already on the list (OK ticks it in / out), then products to add (past orders
+ *  first, then the Dunnes catalogue, then the live Dunnes lookup), and "Add <words> as said". Adds go under "Added by you". */
+@Composable
+private fun FindResults(m: CcMeals, f: CcFind?, searching: String, ov: Map<String, Pair<Boolean, Int>>, onAction: (String) -> Unit,
+                        onVoice: () -> Unit, onClose: () -> Unit) {
+    val first = remember { FocusRequester() }
+    val added = remember(f?.q) { mutableStateListOf<Int>() }
+    var freeAdded by remember(f?.q) { mutableStateOf(false) }
+    val q = if (searching.isNotEmpty()) searching else f?.q.orEmpty()
+    val waiting = searching.isNotEmpty() && f?.q != searching
+    LaunchedEffect(f?.q, waiting) { delay(120); runCatching { first.requestFocus() } }
+    val items = m.sections.flatMap { it.items }.associateBy { it.id }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Image(painterResource(ccIcon("magnify")), null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(Amber))
+        Text(" “$q”", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Pill("microphone", "Search again", onVoice)
+        Pill("close_circle_outline", "Close", onClose)
+    }
+    if (waiting || f == null) {
+        Text("Searching your orders and Dunnes…", color = white(.7f), fontSize = 15.sp, modifier = Modifier.padding(top = 18.dp))
+        Box(Modifier.size(1.dp).focusRequester(first).focusable())
+        return
+    }
+    // focus starts on the first product to add (or the first list match when nothing new was found)
+    val firstAt = if (f.hits.isNotEmpty()) "h0" else if (f.on.isNotEmpty()) "on0" else "free"
+    LazyColumn(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp), contentPadding = PaddingValues(3.dp)) {
+        if (f.on.isNotEmpty()) {
+            item(key = "onh") { Text("ON YOUR LIST", color = white(.55f), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+            itemsIndexed(f.on, key = { _, o -> "on" + o.id + o.where }) { idx, o ->
+                val it0 = items[o.id]; val isOn = ov[o.id]?.first ?: it0?.on ?: o.on; val qq = ov[o.id]?.second ?: it0?.q ?: 1
+                FindRow(if (isOn) "check" else null, o.name, (if (isOn) "" else "Not this time · ") + o.where, if (isOn && it0 != null && !it0.unpriced) eur(it0.price * qq) else "",
+                    on = isOn, requester = if (firstAt == "on$idx") first else null) {
+                    onAction("meals:item:${o.id}:${if (isOn) 0 else 1}"); (ov as? MutableMap)?.put(o.id, !isOn to qq)
+                }
+            }
+        }
+        item(key = "addh") { Text("ADD TO THIS ORDER", color = white(.55f), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp)) }
+        itemsIndexed(f.hits, key = { _, h -> "h" + h.i + h.name }) { idx, h ->
+            val done = h.added || h.i in added
+            FindRow(if (done) "check" else "plus", h.name, if (done) "Added · " + h.src else h.src, h.priceTxt, on = done, requester = if (firstAt == "h$idx") first else null) {
+                if (!done) { added += h.i; onAction("meals:add:${h.i}") }
+            }
+        }
+        if (f.looking) item(key = "look") { Text("Looking on Dunnes for more…", color = white(.6f), fontSize = 13.sp, modifier = Modifier.padding(6.dp)) }
+        else if (f.hits.isEmpty()) item(key = "none") { Text("Nothing in your orders or the Dunnes catalogue.", color = white(.6f), fontSize = 13.sp, modifier = Modifier.padding(6.dp)) }
+        item(key = "free") {
+            FindRow(if (freeAdded) "check" else "plus", "Add “${f.q.replaceFirstChar { it.uppercase() }}” as said", "No Dunnes product - you pick it when ordering", "",
+                on = freeAdded, requester = if (firstAt == "free") first else null) { if (!freeAdded) { freeAdded = true; onAction("meals:addfree") } }
+        }
+    }
+}
+
+@Composable
+private fun FindRow(icon: String?, name: String, sub: String, price: String, on: Boolean, requester: FocusRequester?, onOk: () -> Unit) {
+    Focusable(Modifier.fillMaxWidth().height(48.dp), RoundedCornerShape(12.dp), bg = if (on) white(.09f) else white(.05f), requester = requester, onOk = onOk) {
+        Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(22.dp).clip(RoundedCornerShape(7.dp)).background(if (on) Amber else Color.Transparent)
+                .border(2.dp, if (on) Amber else white(.5f), RoundedCornerShape(7.dp)), contentAlignment = Alignment.Center) {
+                if (icon != null) Image(painterResource(ccIcon(icon)), null, Modifier.size(16.dp), colorFilter = ColorFilter.tint(if (on) Ink else Color.White))
+            }
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                Text(name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(sub, color = white(.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (price.isNotEmpty()) Text(price, color = white(.85f), fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
         }
     }
 }
