@@ -1453,10 +1453,11 @@ private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emp
             // colour: a thin warm-to-cool strip with the presets under it; the dot is where the light is
             if (ct != null) {
                 val w = if (parts.size > 1) (86 * parts.size + 6 * (parts.size - 1)).dp else 220.dp
-                val f = ((ct.k - ct.kmin).toFloat() / (ct.kmax - ct.kmin)).coerceIn(0f, 1f)
+                val lo = ctPreset(0, ct.kmin, ct.kmax)   // the strip runs Warm to Cool, like the presets under it
+                val f = ((ct.k - lo).toFloat() / (ct.kmax - lo).coerceAtLeast(1)).coerceIn(0f, 1f)
                 Box(Modifier.padding(top = 16.dp).width(w).height(16.dp), contentAlignment = Alignment.CenterStart) {
                     Box(Modifier.fillMaxWidth().height(if (ct.on) 6.dp else 4.dp).clip(RoundedCornerShape(3.dp))
-                        .background(Brush.horizontalGradient(listOf(kColor(ct.kmin), kColor((ct.kmin + ct.kmax) / 2), kColor(ct.kmax)))))
+                        .background(Brush.horizontalGradient(listOf(kColor(lo), kColor((lo + ct.kmax) / 2), kColor(ct.kmax)))))
                     Box(Modifier.offset(x = (w - 16.dp) * f).size(16.dp).clip(RoundedCornerShape(8.dp)).background(kColor(ct.k))
                         .border(2.dp, if (ct.on) Amber else Color.White, RoundedCornerShape(8.dp)))
                 }
