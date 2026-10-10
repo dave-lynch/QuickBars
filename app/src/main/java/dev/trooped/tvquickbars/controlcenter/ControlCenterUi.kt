@@ -1480,7 +1480,12 @@ private data class CtView(val on: Boolean, val k: Int, val kmin: Int, val kmax: 
 
 // Same names and spacing as the room card: four presets evenly over the light's range
 private val CT_PRESETS = listOf("Warm", "Soft", "Neutral", "Cool")
-private fun ctPreset(i: Int, kmin: Int, kmax: Int) = ((kmin + (kmax - kmin) * i / 3.0) / 100).roundToInt() * 100
+// Warm starts at 2700 K (a normal warm-white bulb), not the light's very warmest (the spotlights go down to 2200 K)
+private const val CT_WARM = 2700
+private fun ctPreset(i: Int, kmin: Int, kmax: Int): Int {
+    val lo = if (kmax > CT_WARM) maxOf(kmin, CT_WARM) else kmin
+    return ((lo + (kmax - lo) * i / 3.0) / 100).roundToInt() * 100
+}
 private fun ctName(k: Int, kmin: Int, kmax: Int): String =
     CT_PRESETS[CT_PRESETS.indices.minByOrNull { kotlin.math.abs(ctPreset(it, kmin, kmax) - k) } ?: 0]
 
