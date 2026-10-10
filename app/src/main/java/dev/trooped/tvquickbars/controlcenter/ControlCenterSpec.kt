@@ -36,7 +36,10 @@ data class CcNotification(
     val actions: List<Pair<String, String>> = emptyList(),
 )
 /** rtsp / rtspSub: Frigate's go2rtc restreams (full / lighter sub stream) for smooth video; blank = HA's MJPEG proxy */
-data class CcCamera(val entity: String, val name: String, val image: String, val rtsp: String = "", val rtspSub: String = "")
+/** wake: a battery camera (the Eufy doorbell) that only streams once woken - the app asks HA to wake it (cam_wake) and
+ *  keeps it awake (cam_keep each minute) while it is shown; awake: HA says it is streaming now. */
+data class CcCamera(val entity: String, val name: String, val image: String, val rtsp: String = "", val rtspSub: String = "",
+                    val wake: Boolean = false, val awake: Boolean = false)
 /** bri: light brightness 0-100 (-1 when not a dimmable light), for the hold-OK brightness slider; on a TV or
  *  speaker (media_player) it is the volume 0-100, and holding OK opens the same slider as a volume control */
 data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1,
@@ -107,7 +110,8 @@ data class ControlCenterSpec(
                 )
             },
             cameras = o.optJSONArray("cameras").objects().map {
-                CcCamera(it.optString("entity"), it.optString("name"), it.optString("image"), it.optString("rtsp"), it.optString("rtsp_sub"))
+                CcCamera(it.optString("entity"), it.optString("name"), it.optString("image"), it.optString("rtsp"), it.optString("rtsp_sub"),
+                    it.optBoolean("wake", false), it.optBoolean("awake", false))
             },
             cameraStatus = o.optString("camera_status"),
             tiles = o.optJSONArray("tiles").objects().map { tile(it) },

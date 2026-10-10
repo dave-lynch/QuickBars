@@ -176,6 +176,7 @@ internal fun CameraRtspView(
     config: RtspProfile,
     modifier: Modifier = Modifier,
     onError: (() -> Unit)? = null,   // set: the caller falls back instead of showing the debug screen
+    onReady: (() -> Unit)? = null,   // the first picture is on screen
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -248,6 +249,7 @@ internal fun CameraRtspView(
                     videoScalingMode = androidx.media3.common.C.VIDEO_SCALING_MODE_SCALE_TO_FIT
 
                     addListener(object : androidx.media3.common.Player.Listener {
+                        override fun onRenderedFirstFrame() { onReady?.invoke() }
                         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                             val cause = error.cause?.message ?: "Unknown"
                             lastError = "Code: ${error.errorCodeName}\n$cause"

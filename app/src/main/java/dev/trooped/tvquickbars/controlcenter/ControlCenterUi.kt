@@ -400,7 +400,8 @@ fun ControlCenterRoot(
         live?.takeIf { page == "home" || page == "notifications" }?.let { e ->
             val cam = spec.cameras.firstOrNull { it.entity == e }
             LiveCamera(e, cam?.name ?: e.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() }, cam?.rtspSub ?: "",
-                Modifier.align(Alignment.BottomEnd).padding(end = 358.dp, bottom = 34.dp))
+                Modifier.align(Alignment.BottomEnd).padding(end = 358.dp, bottom = 34.dp),
+                wake = cam?.wake == true, awake = cam?.awake == true, onAction = onAction)
         }
         when (page) {
             "catchup" -> CatchupPage(spec, onAction = onAction, onClose = onClose, menu = tvMenu, onMenu = { tvMenu = it })
@@ -1496,8 +1497,26 @@ private fun kColor(k: Int): Color {
 }
 
 // ============================================================ live camera, extending out of the panel
+/** The doorbell waking up: [s] seconds so far (0 = awake, connecting; -1 = the video wouldn't start). */
 @Composable
-private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Modifier) {
+private fun WakeWait(s: Int) {
+    val pulse by rememberInfiniteTransition(label = "wake").animateFloat(.35f, 1f,
+        infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "wakePulse")
+    val late = s > 45
+    Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF1B1530), Color(0xFF0B0914)))),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Image(painterResource(ccIcon("bell_outline")), null, Modifier.size(34.dp).graphicsLayer { alpha = if (s < 0 || late) 1f else pulse },
+            colorFilter = ColorFilter.tint(Amber))
+        Text(when { s < 0 -> "The video didn't start"; late -> "Couldn't wake the doorbell"; s == 0 -> "Connecting…"; else -> "Waking the doorbell…" },
+            color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+        Text(when { s < 0 || late -> "OK on the tile to close, then try again"; s == 0 -> "Starting the video"; else -> "Usually 10–20 seconds · ${s}s" },
+            color = white(.6f), fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
+    }
+}
+
+@Composable
+private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Modifier,
+                       wake: Boolean = false, awake: Boolean = false, onAction: (String) -> Unit = {}) {
     val ctx = LocalContext.current
     val url = remember(entity) {
         (dev.trooped.tvquickbars.notification.normalizedHaBase(ctx)?.toString()?.trimEnd('/')
@@ -1507,6 +1526,14 @@ private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Mod
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
     val slide by animateFloatAsState(if (shown) 0f else 1f, spring(dampingRatio = .85f, stiffness = 320f), label = "liveCam")
+    // A sleeping camera (the doorbell): ask HA to wake it, then keep it awake each minute while it is shown (HA stops it
+    // about 90 s after the last one). HA re-sends the cameras with awake = true once it streams.
+    var waited by remember(entity) { mutableIntStateOf(0) }
+    if (wake) LaunchedEffect(entity) {
+        onAction("cam_wake:$entity")
+        var s = 0
+        while (true) { delay(1000); s++; if (s <= 60) waited = s; if (s % 60 == 0) onAction("cam_keep:$entity") }
+    }
     Box(modifier.size(468.dp, 266.dp)
         .graphicsLayer { translationX = slide * 120f; alpha = 1f - slide }
         .clip(RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 6.dp, bottomEnd = 6.dp))
@@ -1517,7 +1544,20 @@ private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Mod
                 // Real video (H.264 from Frigate's restream, hardware decoded) when the camera has one; HA's MJPEG proxy
                 // (a few stills a second) if not, or if the stream fails.
                 var rtspFailed by remember(entity) { mutableStateOf(false) }
-                if (rtsp.isNotBlank() && !rtspFailed)
+                var tries by remember(entity) { mutableIntStateOf(0) }
+                var retryAt by remember(entity) { mutableIntStateOf(0) }   // the attempt the 2 s pause is over for
+                var playing by remember(entity) { mutableStateOf(false) }
+                if (wake) {
+                    // no picture without the stream (HA's still is a 503): once awake, try the video up to 5 times, 2 s apart
+                    LaunchedEffect(tries) { if (tries > 0) delay(2000); retryAt = tries }
+                    if (awake && !rtspFailed && rtsp.isNotBlank() && retryAt == tries) key(tries) {
+                        dev.trooped.tvquickbars.camera.CameraRtspView(url = rtsp,
+                            config = dev.trooped.tvquickbars.camera.RtspProfile(latency = dev.trooped.tvquickbars.camera.StreamLatency.LOW_LATENCY, muteAudio = true),
+                            modifier = Modifier.fillMaxSize(), onReady = { playing = true },
+                            onError = { playing = false; if (tries < 4) tries++ else rtspFailed = true })
+                    }
+                    if (!playing) WakeWait(if (rtspFailed) -1 else if (awake) 0 else waited)
+                } else if (rtsp.isNotBlank() && !rtspFailed)
                     dev.trooped.tvquickbars.camera.CameraRtspView(url = rtsp,
                         config = dev.trooped.tvquickbars.camera.RtspProfile(latency = dev.trooped.tvquickbars.camera.StreamLatency.LOW_LATENCY, muteAudio = true),
                         modifier = Modifier.fillMaxSize(), onError = { rtspFailed = true })
