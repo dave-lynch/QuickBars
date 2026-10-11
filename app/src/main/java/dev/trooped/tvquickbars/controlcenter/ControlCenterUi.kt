@@ -411,7 +411,7 @@ fun ControlCenterRoot(
                 mealPick?.let { n -> MealPicker(n, spec.meals?.choices ?: emptyList(), onPick = { v -> onAction("meals:set:${n.date}:$v"); mealPick = null }) }
                 mealQty?.let { i -> QtyPopup(i.name, mealQtyVal, i.price) }
             }
-            "cameras" -> CamerasPage(spec, onAction)
+            "cameras" -> CamerasPage(spec, onAction, onKeepAlive)
             "rooms", "room" -> {
                 val r = spec.rooms.firstOrNull { it.id == room }
                 if (page == "room" && r != null) RoomPage(r, onAction = onAction, onDim = { openDim(it) },
@@ -501,7 +501,11 @@ private fun HomePage(
             color = white(.45f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         // cameras strip
         if (spec.cameras.isNotEmpty()) {
-            Text(spec.cameraStatus.ifBlank { "Cameras" }, color = white(.75f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            // the heading opens the Cameras page (every camera large, up to 3 live, recent snapshots)
+            Focusable(Modifier, RoundedCornerShape(8.dp), bg = Color.Transparent, focusedBg = white(.18f), onOk = onCameras) { f ->
+                Text(spec.cameraStatus.ifBlank { "Cameras" } + " ›", color = if (f) Color.White else white(.75f), fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+            }
             // Every camera as a sideways strip: about 3½ tiles show, so the next one peeks in; ◀ ▶ scroll it. Only the
             // tiles on screen are composed, so only those refresh their frame every 4 s.
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
@@ -514,15 +518,6 @@ private fun HomePage(
                                 .padding(horizontal = 4.dp, vertical = 1.dp))
                         Text(c.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 5.dp, vertical = 2.dp))
-                    }
-                }
-                // the Cameras page: every camera large, play up to 3 live, recent snapshots
-                item(key = "all-cams") {
-                    Focusable(Modifier.width(84.dp).height(60.dp), RoundedCornerShape(10.dp), bg = white(.10f), onOk = onCameras) {
-                        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Image(painterResource(ccIcon("cctv")), null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(Amber))
-                            Text("All ›", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
                     }
                 }
             }
@@ -1596,53 +1591,76 @@ private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Mod
 }
 
 // ============================================================ cameras page
-/** Every camera large, four to a row, newest detection first, each with its still refreshing every 4 s. OK plays a camera
- *  live in its tile (up to 3 at once; a 4th stops the one started longest ago), OK again stops it. Underneath, the latest
- *  detection snapshots (person, car, dog, cat) newest first; OK on one plays that camera live. */
+/** Every camera, newest detection first, with the latest detection snapshots underneath. OK plays a camera live (up to
+ *  3; a 4th stops the one started longest ago), OK on a live one stops it. Nothing live: all cameras fill the space as a
+ *  grid. Something live: the live ones fill the left (1 large, 2 side by side, 3 as 2 + 1) and the rest shrink into a
+ *  grid on the right. The panel stays open while you are on this page (it keeps itself awake, up to 30 minutes). */
 @Composable
-private fun CamerasPage(spec: ControlCenterSpec, onAction: (String) -> Unit) {
+private fun CamerasPage(spec: ControlCenterSpec, onAction: (String) -> Unit, onKeepAlive: () -> Unit) {
     val cams = spec.cameras
     val live = remember { mutableStateListOf<String>() }
     fun toggle(e: String) { if (e in live) live.remove(e) else { live.add(e); while (live.size > 3) live.removeAt(0) } }
     var tick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(4_000); tick++ } }
-    val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
-    Column(Modifier.fillMaxSize().background(Color(0xFF0D0A14)).padding(start = 40.dp, end = 40.dp, top = 22.dp, bottom = 12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
-            Text("Cameras", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Text("   ${live.size} of 3 live · newest activity first", color = white(.5f), fontSize = 12.sp)
+    LaunchedEffect(Unit) { repeat(60) { onKeepAlive(); delay(30_000) } }   // watching isn't idle: 30 minutes
+    val reqs = remember { mutableMapOf<String, FocusRequester>() }
+    fun req(e: String) = reqs.getOrPut(e) { FocusRequester() }
+    LaunchedEffect(Unit) { delay(60); cams.firstOrNull()?.let { runCatching { req(it.entity).requestFocus() } } }
+    // keep focus on the tile just pressed after it moves between the live area and the grid
+    var lastOk by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(live.toList()) { lastOk?.let { delay(80); runCatching { req(it).requestFocus() } } }
+
+    @Composable
+    fun Tile(c: CcCamera, modifier: Modifier, big: Boolean) {
+        val on = c.entity in live
+        Focusable(modifier, RoundedCornerShape(if (big) 16.dp else 12.dp), bg = Color.Black, focusedBg = Color.Black,
+            requester = req(c.entity), onOk = { lastOk = c.entity; toggle(c.entity) }) {
+            if (on) CamVideo(c.entity, c.rtspSub.ifBlank { c.rtsp }, Modifier.fillMaxSize(), wake = c.wake, awake = c.awake, onAction = onAction)
+            else Net(c.image, Modifier.fillMaxSize(), tick)
+            Row(Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
+                .padding(horizontal = 7.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (on) Box(Modifier.size(6.dp).clip(RoundedCornerShape(50)).background(Color(0xFFEF4444)))
+                Text((if (on) " " else "") + c.name + (if (on) " · live" else ""), color = Color.White,
+                    fontSize = if (big) 12.sp else 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            }
+            if (c.seen.isNotBlank()) Text(c.seen, color = Color.White, fontSize = if (big) 11.sp else 9.sp, maxLines = 1,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(50))
+                    .background(Color(0xCC7C2D12)).padding(horizontal = 7.dp, vertical = 2.dp))
         }
-        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            cams.chunked(4).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    row.forEach { c -> key(c.entity) {
-                        val on = c.entity in live
-                        Focusable(Modifier.weight(1f).aspectRatio(16f / 9f), RoundedCornerShape(14.dp), bg = Color.Black, focusedBg = Color.Black,
-                            requester = if (c == cams.first()) first else null, onOk = { toggle(c.entity) }) {
-                            if (on) CamVideo(c.entity, c.rtspSub.ifBlank { c.rtsp }, Modifier.fillMaxSize(), wake = c.wake, awake = c.awake, onAction = onAction)
-                            else Net(c.image, Modifier.fillMaxSize(), tick)
-                            Row(Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
-                                .padding(horizontal = 7.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-                                if (on) Box(Modifier.size(6.dp).clip(RoundedCornerShape(50)).background(Color(0xFFEF4444)))
-                                Text((if (on) " " else "") + c.name + (if (on) " · live" else ""), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                            if (c.seen.isNotBlank()) Text(c.seen, color = Color.White, fontSize = 10.sp,
-                                modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(50))
-                                    .background(Color(0xCC7C2D12)).padding(horizontal = 7.dp, vertical = 2.dp))
-                        }
-                    } }
-                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+    }
+    @Composable
+    fun Grid(list: List<CcCamera>, cols: Int, modifier: Modifier, big: Boolean) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            list.chunked(cols).forEach { row ->
+                Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { c -> key(c.entity) { Tile(c, Modifier.weight(1f).fillMaxHeight(), big) } }
+                    repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
                 }
             }
         }
+    }
+
+    Column(Modifier.fillMaxSize().background(Color(0xFF0D0A14)).padding(start = 28.dp, end = 28.dp, top = 16.dp, bottom = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(Amber))
+            Text("Cameras", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("   ${live.size} of 3 live · newest activity first · OK play / stop · Back", color = white(.5f), fontSize = 11.sp)
+        }
+        val liveCams = live.mapNotNull { e -> cams.firstOrNull { it.entity == e } }
+        val rest = cams.filter { it.entity !in live }
+        Row(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (liveCams.isEmpty()) Grid(rest, 4, Modifier.fillMaxSize(), big = false)
+            else {
+                Grid(liveCams, if (liveCams.size == 1) 1 else 2, Modifier.weight(2.6f).fillMaxHeight(), big = true)
+                if (rest.isNotEmpty()) Grid(rest, 2, Modifier.weight(1f).fillMaxHeight(), big = false)
+            }
+        }
         if (spec.snaps.isNotEmpty()) {
-            Text("Recent", color = white(.75f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Text("Recent", color = white(.75f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().height(104.dp)) {
                 items(spec.snaps, key = { it.image }) { sn ->
-                    Focusable(Modifier.width(150.dp).height(96.dp), RoundedCornerShape(12.dp), bg = Color.Black,
-                        onOk = { if (sn.entity !in live) toggle(sn.entity) }) {
+                    Focusable(Modifier.width(170.dp).fillMaxHeight(), RoundedCornerShape(12.dp), bg = Color.Black,
+                        onOk = { if (sn.entity !in live) { lastOk = sn.entity; toggle(sn.entity) } }) {
                         Net(sn.image, Modifier.fillMaxSize())
                         Text("${sn.what} · ${sn.cam} · ${sn.at}", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -1651,7 +1669,5 @@ private fun CamerasPage(spec: ControlCenterSpec, onAction: (String) -> Unit) {
                 }
             }
         }
-        Spacer(Modifier.weight(1f))
-        Text("◀ ▶ ▲ ▼ move · OK play live / stop (up to 3) · OK on a snapshot plays that camera · Back", color = white(.4f), fontSize = 11.sp)
     }
 }
