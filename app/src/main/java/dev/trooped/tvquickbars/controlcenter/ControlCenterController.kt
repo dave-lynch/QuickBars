@@ -54,6 +54,7 @@ class ControlCenterController(
                 now = if (data.has("now")) s.now else cur.now,
                 notifications = if (data.has("notifications")) s.notifications else cur.notifications,
                 cameras = if (data.has("cameras")) s.cameras else cur.cameras,
+                snaps = if (data.has("snaps")) s.snaps else cur.snaps,
                 cameraStatus = if (data.has("camera_status")) s.cameraStatus else cur.cameraStatus,
                 tiles = if (data.has("tiles")) s.tiles else cur.tiles,
                 catchup = if (data.has("catchup")) s.catchup else cur.catchup,

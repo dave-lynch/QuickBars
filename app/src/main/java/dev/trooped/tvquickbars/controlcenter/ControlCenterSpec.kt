@@ -39,7 +39,10 @@ data class CcNotification(
 /** wake: a battery camera (the Eufy doorbell) that only streams once woken - the app asks HA to wake it (cam_wake) and
  *  keeps it awake (cam_keep each minute) while it is shown; awake: HA says it is streaming now. */
 data class CcCamera(val entity: String, val name: String, val image: String, val rtsp: String = "", val rtspSub: String = "",
-                    val wake: Boolean = false, val awake: Boolean = false)
+                    val wake: Boolean = false, val awake: Boolean = false,
+                    val seen: String = "")   // its latest detection, e.g. "Person · 09:55" (HA sends the cameras newest first)
+/** A recent detection snapshot (Frigate's last picture per camera and object), newest first, for the Cameras page. */
+data class CcSnap(val entity: String, val cam: String, val what: String, val at: String, val image: String)
 /** bri: light brightness 0-100 (-1 when not a dimmable light), for the hold-OK brightness slider; on a TV or
  *  speaker (media_player) it is the volume 0-100, and holding OK opens the same slider as a volume control */
 data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1,
@@ -87,6 +90,7 @@ data class ControlCenterSpec(
     val notifications: List<CcNotification>,
     val cameras: List<CcCamera>,
     val cameraStatus: String,
+    val snaps: List<CcSnap> = emptyList(),
     val tiles: List<CcTile>,
     val catchup: List<CcSection>,
     val rooms: List<CcRoom> = emptyList(),
@@ -111,7 +115,10 @@ data class ControlCenterSpec(
             },
             cameras = o.optJSONArray("cameras").objects().map {
                 CcCamera(it.optString("entity"), it.optString("name"), it.optString("image"), it.optString("rtsp"), it.optString("rtsp_sub"),
-                    it.optBoolean("wake", false), it.optBoolean("awake", false))
+                    it.optBoolean("wake", false), it.optBoolean("awake", false), it.optString("seen"))
+            },
+            snaps = o.optJSONArray("snaps").objects().map {
+                CcSnap(it.optString("entity"), it.optString("cam"), it.optString("what"), it.optString("at"), it.optString("image"))
             },
             cameraStatus = o.optString("camera_status"),
             tiles = o.optJSONArray("tiles").objects().map { tile(it) },

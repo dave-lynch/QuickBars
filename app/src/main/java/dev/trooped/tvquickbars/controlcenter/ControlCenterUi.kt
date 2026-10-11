@@ -238,7 +238,7 @@ fun ControlCenterRoot(
                  if (page == "meals" && mealPick != null) { mealPick = null; return }
                  if (noteMenu != null) { noteMenu = null; return }
                  page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"
-                                      "room" -> "rooms"; "rooms" -> "home"; "meals" -> mealsFrom; else -> "close" }
+                                      "room" -> "rooms"; "rooms" -> "home"; "cameras" -> "home"; "meals" -> mealsFrom; else -> "close" }
                  if (page == "close") onClose() }
     fun openNote(n: CcNotification) {
         when {
@@ -411,6 +411,7 @@ fun ControlCenterRoot(
                 mealPick?.let { n -> MealPicker(n, spec.meals?.choices ?: emptyList(), onPick = { v -> onAction("meals:set:${n.date}:$v"); mealPick = null }) }
                 mealQty?.let { i -> QtyPopup(i.name, mealQtyVal, i.price) }
             }
+            "cameras" -> CamerasPage(spec, onAction)
             "rooms", "room" -> {
                 val r = spec.rooms.firstOrNull { it.id == room }
                 if (page == "room" && r != null) RoomPage(r, onAction = onAction, onDim = { openDim(it) },
@@ -429,6 +430,7 @@ fun ControlCenterRoot(
                     onClearAll = { notes.forEach { dismiss(it) }; page = "home" })
                 else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote, onMenu = { noteMenu = it },
                     onCatchup = { catchupFrom = "home"; page = "catchup" }, onRooms = { room = null; page = "rooms" },
+                    onCameras = { live = null; page = "cameras" },
                     openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) })
                 dim?.let { Dimmer(it.title, dimPct, dimTargets.mapIndexed { i, t -> t.title to shown(i) }, dimSel,
@@ -449,7 +451,7 @@ fun ControlCenterRoot(
 private fun HomePage(
     spec: ControlCenterSpec, notes: List<CcNotification>,
     onOpenStack: () -> Unit, onOpen: (CcNotification) -> Unit, onAction: (String) -> Unit, onCamera: (String) -> Unit, onMenu: (CcNotification) -> Unit = {},
-    onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {}, onRooms: () -> Unit = {},
+    onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {}, onRooms: () -> Unit = {}, onCameras: () -> Unit = {},
     openGroup: String? = null, onGroup: (String) -> Unit = {},
 ) {
     var clock by remember { mutableStateOf("") }
@@ -507,8 +509,20 @@ private fun HomePage(
                     Focusable(Modifier.width(84.dp).height(60.dp), RoundedCornerShape(10.dp), bg = Color.Black,
                         requester = if (notes.isEmpty() && c == spec.cameras.first()) first else null, onOk = { onCamera(c.entity) }) { f ->
                         Net(c.image, Modifier.fillMaxSize(), tick)
+                        if (c.seen.isNotBlank()) Text(c.seen.substringBefore(" ·"), color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.align(Alignment.TopEnd).padding(3.dp).clip(RoundedCornerShape(50)).background(Color(0xCC7C2D12))
+                                .padding(horizontal = 4.dp, vertical = 1.dp))
                         Text(c.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 5.dp, vertical = 2.dp))
+                    }
+                }
+                // the Cameras page: every camera large, play up to 3 live, recent snapshots
+                item(key = "all-cams") {
+                    Focusable(Modifier.width(84.dp).height(60.dp), RoundedCornerShape(10.dp), bg = white(.10f), onOk = onCameras) {
+                        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Image(painterResource(ccIcon("cctv")), null, Modifier.size(20.dp), colorFilter = ColorFilter.tint(Amber))
+                            Text("All ›", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -1518,56 +1532,58 @@ private fun WakeWait(s: Int) {
     }
 }
 
+/** A camera's video: Frigate's RTSP restream (hardware decoded) when it has one, else HA's MJPEG proxy. A sleeping
+ *  camera ([wake], the doorbell) is woken first: cam_wake when shown, cam_keep each minute (HA lets it sleep about 90 s
+ *  after the last one), a waiting screen until HA says it is [awake], then the video, tried up to 5 times. */
 @Composable
-private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Modifier,
-                       wake: Boolean = false, awake: Boolean = false, onAction: (String) -> Unit = {}) {
+private fun CamVideo(entity: String, rtsp: String, modifier: Modifier, wake: Boolean = false, awake: Boolean = false, onAction: (String) -> Unit = {}) {
     val ctx = LocalContext.current
     val url = remember(entity) {
         (dev.trooped.tvquickbars.notification.normalizedHaBase(ctx)?.toString()?.trimEnd('/')
             ?: SecurePrefsManager.getHAUrl(ctx)?.trimEnd('/') ?: "") + "/api/camera_proxy_stream/" + entity
     }
     val token = remember { SecurePrefsManager.getHAToken(ctx) }
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val slide by animateFloatAsState(if (shown) 0f else 1f, spring(dampingRatio = .85f, stiffness = 320f), label = "liveCam")
-    // A sleeping camera (the doorbell): ask HA to wake it, then keep it awake each minute while it is shown (HA stops it
-    // about 90 s after the last one). HA re-sends the cameras with awake = true once it streams.
     var waited by remember(entity) { mutableIntStateOf(0) }
     if (wake) LaunchedEffect(entity) {
         onAction("cam_wake:$entity")
         var s = 0
         while (true) { delay(1000); s++; if (s <= 60) waited = s; if (s % 60 == 0) onAction("cam_keep:$entity") }
     }
+    key(entity) {
+        Box(modifier.background(Color.Black)) {
+            var rtspFailed by remember(entity) { mutableStateOf(false) }
+            var tries by remember(entity) { mutableIntStateOf(0) }
+            var retryAt by remember(entity) { mutableIntStateOf(0) }   // the attempt the 2 s pause is over for
+            var playing by remember(entity) { mutableStateOf(false) }
+            val prof = dev.trooped.tvquickbars.camera.RtspProfile(latency = dev.trooped.tvquickbars.camera.StreamLatency.LOW_LATENCY, muteAudio = true)
+            if (wake) {
+                // no picture without the stream (HA's still is a 503): once awake, try the video up to 5 times, 2 s apart
+                LaunchedEffect(tries) { if (tries > 0) delay(2000); retryAt = tries }
+                if (awake && !rtspFailed && rtsp.isNotBlank() && retryAt == tries) key(tries) {
+                    dev.trooped.tvquickbars.camera.CameraRtspView(url = rtsp, config = prof, modifier = Modifier.fillMaxSize(),
+                        onReady = { playing = true }, onError = { playing = false; if (tries < 4) tries++ else rtspFailed = true })
+                }
+                if (!playing) WakeWait(if (rtspFailed) -1 else if (awake) 0 else waited)
+            } else if (rtsp.isNotBlank() && !rtspFailed)
+                dev.trooped.tvquickbars.camera.CameraRtspView(url = rtsp, config = prof, modifier = Modifier.fillMaxSize(), onError = { rtspFailed = true })
+            else dev.trooped.tvquickbars.camera.CameraMjpegView(url = url, authToken = token, modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable
+private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Modifier,
+                       wake: Boolean = false, awake: Boolean = false, onAction: (String) -> Unit = {}) {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val slide by animateFloatAsState(if (shown) 0f else 1f, spring(dampingRatio = .85f, stiffness = 320f), label = "liveCam")
     Box(modifier.size(468.dp, 266.dp)
         .graphicsLayer { translationX = slide * 120f; alpha = 1f - slide }
         .clip(RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 6.dp, bottomEnd = 6.dp))
         .background(PanelBrush).border(1.dp, white(.12f), RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp, topEnd = 6.dp, bottomEnd = 6.dp))
     ) {
-        key(entity) {
-            Box(Modifier.padding(start = 8.dp, top = 8.dp, bottom = 8.dp, end = 14.dp).clip(RoundedCornerShape(18.dp)).fillMaxSize().background(Color.Black)) {
-                // Real video (H.264 from Frigate's restream, hardware decoded) when the camera has one; HA's MJPEG proxy
-                // (a few stills a second) if not, or if the stream fails.
-                var rtspFailed by remember(entity) { mutableStateOf(false) }
-                var tries by remember(entity) { mutableIntStateOf(0) }
-                var retryAt by remember(entity) { mutableIntStateOf(0) }   // the attempt the 2 s pause is over for
-                var playing by remember(entity) { mutableStateOf(false) }
-                if (wake) {
-                    // no picture without the stream (HA's still is a 503): once awake, try the video up to 5 times, 2 s apart
-                    LaunchedEffect(tries) { if (tries > 0) delay(2000); retryAt = tries }
-                    if (awake && !rtspFailed && rtsp.isNotBlank() && retryAt == tries) key(tries) {
-                        dev.trooped.tvquickbars.camera.CameraRtspView(url = rtsp,
-                            config = dev.trooped.tvquickbars.camera.RtspProfile(latency = dev.trooped.tvquickbars.camera.StreamLatency.LOW_LATENCY, muteAudio = true),
-                            modifier = Modifier.fillMaxSize(), onReady = { playing = true },
-                            onError = { playing = false; if (tries < 4) tries++ else rtspFailed = true })
-                    }
-                    if (!playing) WakeWait(if (rtspFailed) -1 else if (awake) 0 else waited)
-                } else if (rtsp.isNotBlank() && !rtspFailed)
-                    dev.trooped.tvquickbars.camera.CameraRtspView(url = rtsp,
-                        config = dev.trooped.tvquickbars.camera.RtspProfile(latency = dev.trooped.tvquickbars.camera.StreamLatency.LOW_LATENCY, muteAudio = true),
-                        modifier = Modifier.fillMaxSize(), onError = { rtspFailed = true })
-                else dev.trooped.tvquickbars.camera.CameraMjpegView(url = url, authToken = token, modifier = Modifier.fillMaxSize())
-            }
-        }
+        CamVideo(entity, rtsp, Modifier.padding(start = 8.dp, top = 8.dp, bottom = 8.dp, end = 14.dp).clip(RoundedCornerShape(18.dp)).fillMaxSize(),
+            wake = wake, awake = awake, onAction = onAction)
         Row(Modifier.padding(start = 18.dp, top = 16.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
             .padding(horizontal = 9.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(Color(0xFFEF4444)))
@@ -1576,5 +1592,66 @@ private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Mod
         Text("Back: keep watching in the corner · OK on the tile: close", color = white(.85f), fontSize = 8.sp,
             modifier = Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 14.dp)
                 .clip(RoundedCornerShape(50)).background(Color(0x99000000)).padding(horizontal = 8.dp, vertical = 2.dp))
+    }
+}
+
+// ============================================================ cameras page
+/** Every camera large, four to a row, newest detection first, each with its still refreshing every 4 s. OK plays a camera
+ *  live in its tile (up to 3 at once; a 4th stops the one started longest ago), OK again stops it. Underneath, the latest
+ *  detection snapshots (person, car, dog, cat) newest first; OK on one plays that camera live. */
+@Composable
+private fun CamerasPage(spec: ControlCenterSpec, onAction: (String) -> Unit) {
+    val cams = spec.cameras
+    val live = remember { mutableStateListOf<String>() }
+    fun toggle(e: String) { if (e in live) live.remove(e) else { live.add(e); while (live.size > 3) live.removeAt(0) } }
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { delay(4_000); tick++ } }
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(60); runCatching { first.requestFocus() } }
+    Column(Modifier.fillMaxSize().background(Color(0xFF0D0A14)).padding(start = 40.dp, end = 40.dp, top = 22.dp, bottom = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
+            Text("Cameras", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("   ${live.size} of 3 live · newest activity first", color = white(.5f), fontSize = 12.sp)
+        }
+        Column(Modifier.padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            cams.chunked(4).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    row.forEach { c -> key(c.entity) {
+                        val on = c.entity in live
+                        Focusable(Modifier.weight(1f).aspectRatio(16f / 9f), RoundedCornerShape(14.dp), bg = Color.Black, focusedBg = Color.Black,
+                            requester = if (c == cams.first()) first else null, onOk = { toggle(c.entity) }) {
+                            if (on) CamVideo(c.entity, c.rtspSub.ifBlank { c.rtsp }, Modifier.fillMaxSize(), wake = c.wake, awake = c.awake, onAction = onAction)
+                            else Net(c.image, Modifier.fillMaxSize(), tick)
+                            Row(Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
+                                .padding(horizontal = 7.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (on) Box(Modifier.size(6.dp).clip(RoundedCornerShape(50)).background(Color(0xFFEF4444)))
+                                Text((if (on) " " else "") + c.name + (if (on) " · live" else ""), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            if (c.seen.isNotBlank()) Text(c.seen, color = Color.White, fontSize = 10.sp,
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(50))
+                                    .background(Color(0xCC7C2D12)).padding(horizontal = 7.dp, vertical = 2.dp))
+                        }
+                    } }
+                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+        if (spec.snaps.isNotEmpty()) {
+            Text("Recent", color = white(.75f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                items(spec.snaps, key = { it.image }) { sn ->
+                    Focusable(Modifier.width(150.dp).height(96.dp), RoundedCornerShape(12.dp), bg = Color.Black,
+                        onOk = { if (sn.entity !in live) toggle(sn.entity) }) {
+                        Net(sn.image, Modifier.fillMaxSize())
+                        Text("${sn.what} · ${sn.cam} · ${sn.at}", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 6.dp, vertical = 3.dp))
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Text("◀ ▶ ▲ ▼ move · OK play live / stop (up to 3) · OK on a snapshot plays that camera · Back", color = white(.4f), fontSize = 11.sp)
     }
 }
