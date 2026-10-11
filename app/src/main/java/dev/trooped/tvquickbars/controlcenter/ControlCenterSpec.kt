@@ -40,7 +40,8 @@ data class CcNotification(
  *  keeps it awake (cam_keep each minute) while it is shown; awake: HA says it is streaming now. */
 data class CcCamera(val entity: String, val name: String, val image: String, val rtsp: String = "", val rtspSub: String = "",
                     val wake: Boolean = false, val awake: Boolean = false,
-                    val seen: String = "")   // its latest detection, e.g. "Person · 09:55" (HA sends the cameras newest first)
+                    val seen: String = "",   // its latest detection, e.g. "Person · 09:55" (HA sends the cameras newest first)
+                    val big: Boolean = false)   // a wide overview (e.g. all cameras in one picture): opens a larger corner PiP
 /** A recent detection snapshot (Frigate's last picture per camera and object), newest first, for the Cameras page. */
 data class CcSnap(val entity: String, val cam: String, val what: String, val at: String, val image: String)
 /** bri: light brightness 0-100 (-1 when not a dimmable light), for the hold-OK brightness slider; on a TV or
@@ -115,7 +116,8 @@ data class ControlCenterSpec(
             },
             cameras = o.optJSONArray("cameras").objects().map {
                 CcCamera(it.optString("entity"), it.optString("name"), it.optString("image"), it.optString("rtsp"), it.optString("rtsp_sub"),
-                    it.optBoolean("wake", false), it.optBoolean("awake", false), it.optString("seen"))
+                    it.optBoolean("wake", false), it.optBoolean("awake", false), it.optString("seen"),
+                    it.optBoolean("big", false))
             },
             snaps = o.optJSONArray("snaps").objects().map {
                 CcSnap(it.optString("entity"), it.optString("cam"), it.optString("what"), it.optString("at"), it.optString("image"))

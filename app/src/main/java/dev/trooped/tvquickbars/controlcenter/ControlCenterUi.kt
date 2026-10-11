@@ -180,7 +180,7 @@ private fun Net(url: String?, modifier: Modifier, tick: Int = 0, crop: ContentSc
 fun ControlCenterRoot(
     spec: ControlCenterSpec,
     onAction: (String) -> Unit,
-    onCamera: (String, String?) -> Unit,   // entity, RTSP stream for the corner PiP
+    onCamera: (String, String?, Boolean, String) -> Unit,   // entity, RTSP stream, big PiP, name - for the corner PiP
     onClose: () -> Unit,
     onKeepAlive: () -> Unit = {},
 ) {
@@ -357,7 +357,8 @@ fun ControlCenterRoot(
             .onPreviewKeyEvent { e ->
                 if (dim == null && live != null && (e.key == Key.Back || e.key == Key.Escape)) {
                     if (e.type == KeyEventType.KeyUp) { val cam = live!!; live = null
-                        onCamera(cam, spec.cameras.firstOrNull { it.entity == cam }?.rtsp?.takeIf { it.isNotBlank() }); onClose() }
+                        val cc = spec.cameras.firstOrNull { it.entity == cam }
+                        onCamera(cam, cc?.rtsp?.takeIf { it.isNotBlank() }, cc?.big == true, cc?.name.orEmpty()); onClose() }
                     true
                 } else if (mealQty != null) {
                     val it0 = mealQty!!

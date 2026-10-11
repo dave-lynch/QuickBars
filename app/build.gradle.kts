@@ -12,8 +12,8 @@ android {
         applicationId = "dev.trooped.tvquickbars"
         minSdk = 28
         targetSdk = 35
-        versionCode = 25
-        versionName = "1.3.3"
+        versionCode = 26
+        versionName = "1.3.4"
         buildConfigField("String", "REVENUECAT_API_KEY", findProperty("REVENUECAT_API_KEY") as String? ?: "\"\"")
     }
 

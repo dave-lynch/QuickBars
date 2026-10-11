@@ -475,10 +475,13 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
             windowManager = windowManager,
             runOnMain = ::runOnMain,
             serviceScope = serviceScope,
-            openCamera = { entity, rtsp -> handleCameraRequest(CameraRequest(cameraEntity = entity, rtspUrl = rtsp, position = "bottom_right",
-                customTitle = if (rtsp != null) entity.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() }
-                    .replace("Frontdoor", "Front door") else null,
-                muteAudio = if (rtsp != null) true else null, rtspLatency = if (rtsp != null) "low" else null)) },
+            openCamera = { entity, rtsp, big, name ->
+                // a "big" camera (a wide overview of all cameras) gets a PiP about half the screen wide, 16:9; others the usual size
+                val bigW = if (big) resources.displayMetrics.widthPixels / 2 else null
+                handleCameraRequest(CameraRequest(cameraEntity = entity, rtspUrl = rtsp, position = "bottom_right",
+                    sizePxW = bigW, sizePxH = bigW?.let { it * 9 / 16 },
+                    customTitle = if (rtsp != null) name.ifBlank { entity.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() } } else null,
+                    muteAudio = if (rtsp != null) true else null, rtspLatency = if (rtsp != null) "low" else null)) },
         ).also { it.onServiceConnected() }
 
         camera = CameraPipController(
