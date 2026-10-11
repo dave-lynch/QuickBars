@@ -660,13 +660,15 @@ private fun okLabel(ok: String) = when {
 }
 private val MENU_LABEL = mapOf("remind" to "Remind me", "follow" to "Follow", "like" to "Like", "dislike" to "Not interested")
 
-/** TV page filter, remembered while the app runs: "mine" = My shows, "foryou" = mine + recommended, "all" = everything. */
+/** TV page filter, remembered while the app runs: "mine" = My shows, "foryou" = mine + recommended, "all" = everything,
+ *  "sport" = the Sport rows (Formula 1, PPV, Soccer, Boxing; items tagged "sport", shown only there). */
 private object TvView { var current = "mine" }
-private val TV_VIEWS = listOf("mine" to "My shows", "foryou" to "Recommended", "all" to "Everything")
+private val TV_VIEWS = listOf("mine" to "My shows", "foryou" to "Recommended", "all" to "Everything", "sport" to "Sport")
 private fun tvKeep(view: String, it: CcCatchupItem) = when (view) {
+    "sport" -> it.tag == "sport"
     "mine" -> it.tag == "mine"
     "foryou" -> it.tag == "mine" || it.tag == "pick"
-    else -> true
+    else -> it.tag != "sport"
 }
 
 @Composable
@@ -677,7 +679,8 @@ private fun CatchupPage(
     // Apple TV style: the focused programme fills the top (big title, where and when, description, its artwork fading
     // in from the right); rows of posters underneath: Up next, On now, Later tonight, New to stream, then the catch-up
     // days. OK does the row's main thing (watch / stream / remind); hold OK for remind / follow / like / not interested.
-    // ▲ from the top row reaches the filter chips (My shows · Recommended · Everything); OK on one switches the rows.
+    // ▲ from the top row reaches the filter chips (My shows · Recommended · Everything · Sport); OK on one switches the
+    // rows. Sport has its own rows (Formula 1, PPV, Soccer, Boxing), TiviMate channels first.
     var view by remember {
         mutableStateOf(TvView.current.let { v -> if (v == "mine" && spec.catchup.none { s -> s.items.any { it.tag == "mine" } }) "foryou" else v })
     }
@@ -754,7 +757,11 @@ private fun CatchupPage(
                     }
                 }
             }
-            if (shown.isEmpty()) Text(if (view == "mine") "Nothing from your shows right now · press ▲ and pick Recommended" else "Nothing here yet",
+            if (shown.isEmpty()) Text(when (view) {
+                    "mine" -> "Nothing from your shows right now · press ▲ and pick Recommended"
+                    "sport" -> "No Formula 1, PPV, soccer or boxing on your channels in the next 3 days"
+                    else -> "Nothing here yet"
+                },
                 color = white(.6f), fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
             LazyColumn(Modifier.weight(1f).padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 itemsIndexed(shown, key = { _, sec -> view + sec.title }) { si, sec ->
