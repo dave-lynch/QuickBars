@@ -36,7 +36,7 @@ data class CcNotification(
     val actions: List<Pair<String, String>> = emptyList(),
 )
 /** rtsp / rtspSub: Frigate's go2rtc restreams (full / lighter sub stream) for smooth video; blank = HA's MJPEG proxy */
-/** wake: a battery camera (the Eufy doorbell) that only streams once woken - the app asks HA to wake it (cam_wake) and
+/** wake: a battery camera (e.g. a battery doorbell) that only streams once woken - the app asks HA to wake it (cam_wake) and
  *  keeps it awake (cam_keep each minute) while it is shown; awake: HA says it is streaming now. */
 data class CcCamera(val entity: String, val name: String, val image: String, val rtsp: String = "", val rtspSub: String = "",
                     val wake: Boolean = false, val awake: Boolean = false,
@@ -47,7 +47,7 @@ data class CcSnap(val entity: String, val cam: String, val what: String, val at:
  *  speaker (media_player) it is the volume 0-100, and holding OK opens the same slider as a volume control */
 data class CcTile(val id: String, val title: String, val sub: String, val icon: String, val on: Boolean, val bri: Int = -1,
                   val members: List<CcTile> = emptyList(),   // a light group's own lights, shown when it is held
-                  val n: Int = 1,   // how many single lights this part is (Spotlights = 2): weights the group's average
+                  val n: Int = 1,   // how many single lights this part is (a two-light group = 2): weights the group's average
                   val k: Int = 0, val kmin: Int = 0, val kmax: Int = 0)   // colour temperature now and the light's range (kelvin; 0 = none)
 data class CcCatchupItem(
     val id: String, val title: String, val sub: String, val img: String?, val badge: String?,
@@ -73,8 +73,8 @@ data class CcShopItem(val id: String, val name: String, val sub: String, val q: 
 data class CcShopSection(val id: String, val title: String, val note: String, val count: Int, val sub: String, val items: List<CcShopItem>)
 data class CcMealTotal(val amount: String, val items: Int, val dinners: Int, val usual: String, val unpriced: Int,
                        val removed: List<String>, val removedN: Int)
-// Search / add on Review shopping (voice or typed): what is already on the list, then products from past orders / the Dunnes
-// catalogue (the phone's Add box ranking, worked out in tv_meals.py). looking = the live Dunnes lookup is still running.
+// Search / add on Review shopping (voice or typed): what is already on the list, then products from past orders / the shop's
+// catalogue (the phone's Add box ranking, worked out in tv_meals.py). looking = the live shop lookup is still running.
 data class CcFindOn(val id: String, val name: String, val where: String, val on: Boolean)
 data class CcFindHit(val i: Int, val name: String, val priceTxt: String, val src: String, val added: Boolean)
 data class CcFind(val q: String, val on: List<CcFindOn>, val hits: List<CcFindHit>, val looking: Boolean)

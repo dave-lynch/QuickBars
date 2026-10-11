@@ -251,7 +251,7 @@ fun ControlCenterRoot(
     fun dismiss(n: CcNotification) { dismissed += n.id; onAction("notif_dismiss:${n.id}") }
 
     // Brightness slider (hold OK on a light tile): ▲▼ in 10% steps, sent to HA after a short pause; OK / Back close it
-    // A light group opens with its parts listed under the slider (e.g. All · Spotlights · Standing lamp):
+    // A light group opens with its parts listed under the slider (e.g. All · Ceiling · Lamp):
     // ◀ ▶ picks which one the slider sets, ▲ ▼ sets it.
     var dimTargets by remember { mutableStateOf<List<CcTile>>(emptyList()) }
     var dimSel by remember { mutableIntStateOf(0) }
@@ -264,7 +264,7 @@ fun ControlCenterRoot(
     var dimVerb by remember { mutableStateOf("bright") }
     val dimStep = if (dimVerb == "vol") 2 else 10
     fun pctOf(t: CcTile) = if (t.bri >= 0) t.bri else if (t.on) 100 else 0
-    // A light group's level is what Home Assistant reports for it: the average of its lights that are on (Spotlights count as
+    // A light group's level is what Home Assistant reports for it: the average of its lights that are on (a two-light group count as
     // two). So "All" follows its parts, and setting "All" sets every part to that level.
     var dimTouched by remember { mutableLongStateOf(0L) }
     fun groupAvg(): Int {
@@ -1137,7 +1137,7 @@ private fun MealNights(m: CcMeals, onPick: (CcMealNight) -> Unit, onNext: () -> 
 
 /** "Lean irish beef mince typically 5% fat 350g" -> "Lean irish beef mince" (drops brand prefixes and pack sizes) */
 private fun shortNeed(s: String): String =
-    s.replace(Regex("(?i)^(dunnes stores |my family favourites )"), "").replace(Regex("(?i)\\s+(typically.*|\\d+(\\.\\d+)?\\s*(x\\s*\\d+(\\.\\d+)?\\s*)?(g|kg|ml|l|litre)\\b.*)$"), "")
+    s.replace(Regex("(?i)^[\\w']+ stores (simply better |deluxe )?"), "").replace(Regex("(?i)\\s+(typically.*|\\d+(\\.\\d+)?\\s*(x\\s*\\d+(\\.\\d+)?\\s*)?(g|kg|ml|l|litre)\\b.*)$"), "")
         .replaceFirstChar { it.uppercase() }
 
 @Composable
@@ -1250,7 +1250,7 @@ private fun VoiceBubble(v: CcVoice.Ui, modifier: Modifier) {
 }
 
 /** Search results on Review shopping: what is already on the list (OK ticks it in / out), then products to add (past orders
- *  first, then the Dunnes catalogue, then the live Dunnes lookup), and "Add <words> as said". Adds go under "Added by you". */
+ *  first, then the shop's catalogue, then a live shop lookup), and "Add <words> as said". Adds go under "Added by you". */
 @Composable
 private fun FindResults(m: CcMeals, f: CcFind?, searching: String, ov: Map<String, Pair<Boolean, Int>>, onAction: (String) -> Unit,
                         onVoice: () -> Unit, onClose: () -> Unit) {
@@ -1268,7 +1268,7 @@ private fun FindResults(m: CcMeals, f: CcFind?, searching: String, ov: Map<Strin
         Pill("close_circle_outline", "Close", onClose)
     }
     if (waiting || f == null) {
-        Text("Searching your orders and Dunnes…", color = white(.7f), fontSize = 15.sp, modifier = Modifier.padding(top = 18.dp))
+        Text("Searching your orders and the shop…", color = white(.7f), fontSize = 15.sp, modifier = Modifier.padding(top = 18.dp))
         Box(Modifier.size(1.dp).focusRequester(first).focusable())
         return
     }
@@ -1292,10 +1292,10 @@ private fun FindResults(m: CcMeals, f: CcFind?, searching: String, ov: Map<Strin
                 if (!done) { added += h.i; onAction("meals:add:${h.i}") }
             }
         }
-        if (f.looking) item(key = "look") { Text("Looking on Dunnes for more…", color = white(.6f), fontSize = 13.sp, modifier = Modifier.padding(6.dp)) }
-        else if (f.hits.isEmpty()) item(key = "none") { Text("Nothing in your orders or the Dunnes catalogue.", color = white(.6f), fontSize = 13.sp, modifier = Modifier.padding(6.dp)) }
+        if (f.looking) item(key = "look") { Text("Looking in the shop for more…", color = white(.6f), fontSize = 13.sp, modifier = Modifier.padding(6.dp)) }
+        else if (f.hits.isEmpty()) item(key = "none") { Text("Nothing in your orders or the shop's catalogue.", color = white(.6f), fontSize = 13.sp, modifier = Modifier.padding(6.dp)) }
         item(key = "free") {
-            FindRow(if (freeAdded) "check" else "plus", "Add “${f.q.replaceFirstChar { it.uppercase() }}” as said", "No Dunnes product - you pick it when ordering", "",
+            FindRow(if (freeAdded) "check" else "plus", "Add “${f.q.replaceFirstChar { it.uppercase() }}” as said", "No shop product - you pick it when ordering", "",
                 on = freeAdded, requester = if (firstAt == "free") first else null) { if (!freeAdded) { freeAdded = true; onAction("meals:addfree") } }
         }
     }
@@ -1495,7 +1495,7 @@ private data class CtView(val on: Boolean, val k: Int, val kmin: Int, val kmax: 
 
 // Same names and spacing as the room card: four presets evenly over the light's range
 private val CT_PRESETS = listOf("Warm", "Soft", "Neutral", "Cool")
-// Warm starts at 2700 K (a normal warm-white bulb), not the light's very warmest (the spotlights go down to 2200 K)
+// Warm starts at 2700 K (a normal warm-white bulb), not the light's very warmest (some lights go down to 2200 K)
 private const val CT_WARM = 2700
 private fun ctPreset(i: Int, kmin: Int, kmax: Int): Int {
     val lo = if (kmax > CT_WARM) maxOf(kmin, CT_WARM) else kmin
