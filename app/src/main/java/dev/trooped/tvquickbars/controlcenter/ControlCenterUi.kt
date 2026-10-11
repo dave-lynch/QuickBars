@@ -1630,11 +1630,16 @@ private fun CamerasPage(spec: ControlCenterSpec, onAction: (String) -> Unit, onK
     }
     @Composable
     fun Grid(list: List<CcCamera>, cols: Int, modifier: Modifier, big: Boolean) {
-        Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            list.chunked(cols).forEach { row ->
-                Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    row.forEach { c -> key(c.entity) { Tile(c, Modifier.weight(1f).fillMaxHeight(), big) } }
-                    repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
+        // Tiles keep the cameras' 16:9 shape: the largest size where every row fits in the space, centred in it
+        BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
+            val gap = 8.dp
+            val rows = ((list.size + cols - 1) / cols).coerceAtLeast(1)
+            val w = minOf((maxWidth - gap * (cols - 1)) / cols, ((maxHeight - gap * (rows - 1)) / rows) * (16f / 9f))
+            Column(verticalArrangement = Arrangement.spacedBy(gap), horizontalAlignment = Alignment.CenterHorizontally) {
+                list.chunked(cols).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+                        row.forEach { c -> key(c.entity) { Tile(c, Modifier.width(w).height(w * 9f / 16f), big) } }
+                    }
                 }
             }
         }
