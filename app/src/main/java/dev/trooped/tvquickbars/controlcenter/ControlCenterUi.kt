@@ -679,7 +679,7 @@ private fun okLabel(ok: String) = when {
     ok.startsWith("tvfb:remind:") -> "Remind me"
     else -> ""
 }
-private val MENU_LABEL = mapOf("remind" to "Remind me", "follow" to "Follow", "like" to "Like", "dislike" to "Not interested")
+private val MENU_LABEL = mapOf("seen" to "Watched it", "remind" to "Remind me", "follow" to "Follow", "like" to "Like", "dislike" to "Not interested")
 
 /** TV page filter, remembered while the app runs. When HA sends rows with "views": Series / Films (yours first, then
  *  what's on, then picks for you), Everything (the whole guide) and Sport; each row lists the chips that show it.
@@ -792,7 +792,7 @@ private fun CatchupPage(
             if (shown.isEmpty()) Text(when (view) {
                     "mine" -> "Nothing from your shows right now · press ▲ and pick Recommended"
                     "series", "films" -> "Nothing here yet · press ▲ and pick Everything"
-                    "sport" -> "No Formula 1, PPV, soccer or boxing on your channels in the next 3 days"
+                    "sport" -> "No sport found yet: it fills at the next guide refresh"
                     else -> "Nothing here yet"
                 },
                 color = white(.6f), fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
@@ -820,7 +820,7 @@ private fun CatchupPage(
                 if (act == "ok") press(m)
                 else {
                     onAction("tvfb:$act:${m.key}")
-                    toast = when (act) { "remind" -> "Reminder set"; "follow" -> "Following"; "like" -> "Liked"; else -> "Hidden from now on" } + " · ${m.title}"
+                    toast = when (act) { "seen" -> "Marked watched"; "remind" -> "Reminder set"; "follow" -> "Following"; "like" -> "Liked"; else -> "Hidden from now on" } + " · ${m.title}"
                 }
             })
         }
