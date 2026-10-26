@@ -89,15 +89,22 @@ private fun ccIcon(name: String): Int {
     }
 }
 
-/** Image request for HA-relative or absolute URLs; HA URLs get the long-lived token. */
-private fun imageRequest(ctx: Context, url: String?, tick: Int = 0): ImageRequest? {
+/** Image request for HA-relative or absolute URLs; HA URLs get the long-lived token. [widthPx]: the size it is shown at.
+ *  HA's camera snapshots (/api/camera_proxy/) are then asked for at that width instead of full size (a 1080p or 4K
+ *  frame every 4 s per tile was the heaviest work while the panel is open), and any picture is decoded no bigger. */
+private fun imageRequest(ctx: Context, url: String?, tick: Int = 0, widthPx: Int = 0): ImageRequest? {
     if (url.isNullOrBlank()) return null
     val (abs, isHa) = resolveAgainstHaBase(ctx, url)
     if (abs == null) return null
     val token = if (isHa) SecurePrefsManager.getHAToken(ctx) else null
-    val u = if (tick > 0) abs + (if (abs.contains("?")) "&" else "?") + "cc=" + tick else abs
-    return ImageRequest.Builder(ctx).data(u).crossfade(tick == 0).allowHardware(false)
+    val params = listOfNotNull(
+        if (isHa && widthPx > 0 && abs.contains("/api/camera_proxy/")) "width=$widthPx" else null,
+        if (tick > 0) "cc=$tick" else null,
+    )
+    val u = if (params.isEmpty()) abs else abs + (if (abs.contains("?")) "&" else "?") + params.joinToString("&")
+    return ImageRequest.Builder(ctx).data(u).crossfade(tick == 0)
         .apply {
+            if (widthPx > 0) size(widthPx, widthPx)
             if (!token.isNullOrBlank()) addHeader("Authorization", "Bearer $token")
             if (tick > 0) { memoryCachePolicy(CachePolicy.DISABLED); diskCachePolicy(CachePolicy.DISABLED) }
         }.build()
@@ -156,10 +163,10 @@ private fun IconTile(icon: String, size: Dp, color: Long? = null, on: Boolean = 
 }
 
 @Composable
-private fun Net(url: String?, modifier: Modifier, tick: Int = 0, crop: ContentScale = ContentScale.Crop) {
+private fun Net(url: String?, modifier: Modifier, tick: Int = 0, crop: ContentScale = ContentScale.Crop, widthPx: Int = 0) {
     val ctx = LocalContext.current
     if (tick == 0) {
-        val req = remember(url) { imageRequest(ctx, url) }
+        val req = remember(url, widthPx) { imageRequest(ctx, url, widthPx = widthPx) }
         if (req == null) Box(modifier.background(white(.08f))) else AsyncImage(req, null, modifier, contentScale = crop)
         return
     }
@@ -167,7 +174,7 @@ private fun Net(url: String?, modifier: Modifier, tick: Int = 0, crop: ContentSc
     // keeps the last frame instead of going blank while loading (every 4 s, and when an update re-sends the list).
     var frame by remember(url) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(url, tick) {
-        val req = imageRequest(ctx, url, tick) ?: return@LaunchedEffect
+        val req = imageRequest(ctx, url, tick, widthPx) ?: return@LaunchedEffect
         val r = ctx.imageLoader.execute(req)
         (r as? SuccessResult)?.drawable?.let { d -> frame = d.toBitmap().asImageBitmap() }
     }
@@ -183,8 +190,10 @@ fun ControlCenterRoot(
     onCamera: (String, String?, Boolean, String) -> Unit,   // entity, RTSP stream, big PiP, name - for the corner PiP
     onClose: () -> Unit,
     onKeepAlive: () -> Unit = {},
+    loading: Boolean = false,   // opened from the remote before HA's data came: what is shown is from last time
 ) {
     var page by remember(spec.page) { mutableStateOf(spec.page) }
+    var homeFrom by remember { mutableStateOf<String?>(null) }   // the panel item a sub-page was opened from: Back puts focus there
     var catchupFrom by remember(spec.page) { mutableStateOf("notifications") }
     var openGroup by remember { mutableStateOf<String?>(null) }
     var room by remember { mutableStateOf<String?>(null) }   // the room open on the "room" page
@@ -212,8 +221,13 @@ fun ControlCenterRoot(
     var findHide by remember { mutableStateOf(false) }
     val find = spec.meals?.find?.takeIf { !findHide }
     LaunchedEffect(spec.meals?.find?.q) { if (spec.meals?.find != null) { findHide = false; if (spec.meals.find.q == findSent) findSent = "" } }
-    LaunchedEffect(voice.error) { if (voice.error.isNotEmpty()) { delay(5000); CcVoice.clearError() } }   // hold-OK menu open on the TV page   // light group held open: its lights show under the tiles   // where Back from catch-up returns to
+    LaunchedEffect(voice.error) { if (voice.error.isNotEmpty()) { delay(5000); CcVoice.clearError() } }
     val dismissed = remember { mutableStateListOf<String>() }
+    // The notification just dismissed: hidden at once, sent to HA after 5 s unless Undo is pressed (or at once when the panel closes)
+    var undoNote by remember { mutableStateOf<CcNotification?>(null) }
+    val sendNow = rememberUpdatedState(onAction)
+    LaunchedEffect(undoNote?.id) { val n = undoNote ?: return@LaunchedEffect; delay(5_000); onAction("notif_dismiss:${n.id}"); undoNote = null }
+    DisposableEffect(Unit) { onDispose { undoNote?.let { sendNow.value("notif_dismiss:${it.id}") } } }
     val notes = spec.notifications.filter { it.id !in dismissed }
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
@@ -249,12 +263,17 @@ fun ControlCenterRoot(
     fun openNote(n: CcNotification) {
         when {
             n.open == "page:meals" -> { mealsFrom = page; mealTab = 0; onAction("meals:open"); page = "meals" }
-            n.open.startsWith("page:") -> { catchupFrom = page; page = n.open.removePrefix("page:") }
+            n.open.startsWith("page:") -> { homeFrom = null; catchupFrom = page; page = n.open.removePrefix("page:") }
             n.open.startsWith("camera:") -> live = n.open.removePrefix("camera:")
             else -> { onAction("notif_open:${n.id}"); onClose() }
         }
     }
-    fun dismiss(n: CcNotification) { dismissed += n.id; onAction("notif_dismiss:${n.id}") }
+    fun dismiss(n: CcNotification) {
+        undoNote?.let { if (it.id != n.id) onAction("notif_dismiss:${it.id}") }   // the previous one can't be undone any more
+        dismissed += n.id; undoNote = n
+    }
+    fun undoDismiss() { undoNote?.let { dismissed -= it.id }; undoNote = null }
+    fun clearAll(list: List<CcNotification>) { undoNote?.let { onAction("notif_dismiss:${it.id}") }; undoNote = null; list.forEach { dismissed += it.id; onAction("notif_dismiss:${it.id}") } }
 
     // Brightness slider (hold OK on a light tile): ▲▼ in 10% steps, sent to HA after a short pause; OK / Back close it
     // A light group opens with its parts listed under the slider (e.g. All · Ceiling · Lamp):
@@ -434,10 +453,11 @@ fun ControlCenterRoot(
                     .border(1.dp, white(.12f), RoundedCornerShape(26.dp))
             ) {
                 if (page == "notifications") NotificationsPage(notes, onBack = { back() }, onOpen = ::openNote, onDismiss = ::dismiss, onMenu = { noteMenu = it },
-                    onClearAll = { notes.forEach { dismiss(it) }; page = "home" })
-                else HomePage(spec, notes, onOpenStack = { page = "notifications" }, onOpen = ::openNote, onMenu = { noteMenu = it },
-                    onCatchup = { catchupFrom = "home"; page = "catchup" }, onRooms = { room = null; page = "rooms" },
-                    onCameras = { live = null; page = "cameras" },
+                    onClearAll = { clearAll(notes); page = "home" }, undo = undoNote, onUndo = ::undoDismiss)
+                else HomePage(spec, notes, onOpenStack = { homeFrom = null; page = "notifications" }, onOpen = ::openNote, onMenu = { noteMenu = it },
+                    onCatchup = { homeFrom = "tv"; catchupFrom = "home"; page = "catchup" }, onRooms = { homeFrom = "rooms"; room = null; page = "rooms" },
+                    onCameras = { homeFrom = "cameras"; live = null; page = "cameras" }, returnTo = homeFrom, loading = loading,
+                    undo = undoNote, onUndo = ::undoDismiss,
                     openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
                     onDim = { openDim(it) }, onNowMenu = { nowMenu = it }, nowBusy = nowBusy,
                     onNowOk = { a -> nowBusy = "Switching to the next stream…"; onAction(a) })
@@ -464,14 +484,21 @@ private fun HomePage(
     onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {}, onRooms: () -> Unit = {}, onCameras: () -> Unit = {},
     openGroup: String? = null, onGroup: (String) -> Unit = {}, onNowMenu: (CcNow) -> Unit = {},
     nowBusy: String = "", onNowOk: (String) -> Unit = onAction,
+    returnTo: String? = null, loading: Boolean = false, undo: CcNotification? = null, onUndo: () -> Unit = {},
 ) {
     var clock by remember { mutableStateOf("") }
-    LaunchedEffect(Unit) { while (true) { clock = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()); delay(10_000) } }
+    // changes on the minute (not every 10 s from whenever the panel opened)
+    LaunchedEffect(Unit) { val f = SimpleDateFormat("HH:mm", Locale.getDefault())
+        while (true) { val t = System.currentTimeMillis(); clock = f.format(Date(t)); delay(60_000 - t % 60_000 + 50) } }
     var tick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(4_000); tick++ } }
     val first = remember { FocusRequester() }
+    // Back from TV / Rooms / Cameras: focus goes back to what opened it
+    val back = remember { mapOf("tv" to FocusRequester(), "rooms" to FocusRequester(), "cameras" to FocusRequester()) }
     var hasFocus by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { delay(80); runCatching { first.requestFocus() } }
+    LaunchedEffect(Unit) { delay(80); runCatching { (back[returnTo] ?: first).requestFocus() }.onFailure { runCatching { first.requestFocus() } } }
+    // carried over from last time while HA's fresh data is on its way
+    val stale = if (loading) Modifier.graphicsLayer { alpha = .5f } else Modifier
     // An update can remove the item that had focus (e.g. the last notification cleared on the phone): move focus to
     // the first item still on screen so the remote keeps working, without stealing it otherwise.
     LaunchedEffect(notes.isEmpty(), spec.cameras.size, spec.tiles.size, openGroup) { delay(120); if (!hasFocus) runCatching { first.requestFocus() } }
@@ -480,7 +507,14 @@ private fun HomePage(
     // brings the next row into view, so nothing at the bottom is ever cut off. The key hint stays pinned below.
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 18.dp).onFocusChanged { hasFocus = it.hasFocus }) {
     Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(clock, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(clock, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            if (loading) {
+                val pulse by rememberInfiniteTransition(label = "ccLoad").animateFloat(.45f, 1f,
+                    infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "ccLoadA")
+                Text("Updating…", color = Amber.copy(alpha = pulse), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
         if (spec.subtitle.isNotBlank()) Text(spec.subtitle, color = white(.65f), fontSize = 14.sp, modifier = Modifier.offset(y = (-8).dp))
         spec.now?.let { n ->
             @Composable fun body() = Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -509,9 +543,11 @@ private fun HomePage(
             if (notes.isNotEmpty()) Text("${notes.size} new", color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 8.dp, vertical = 2.dp))
         }
+        undo?.let { UndoRow(it, onUndo) }
         if (notes.isEmpty()) {
-            Text("You're all caught up", color = white(.5f), fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
-        } else Box(Modifier.fillMaxWidth().height(if (notes.size > 1) 92.dp else 80.dp)) {
+            Text(if (loading && spec.notifications.isEmpty()) "Getting notifications…" else "You're all caught up", color = white(.5f), fontSize = 14.sp,
+                modifier = Modifier.padding(vertical = 8.dp))
+        } else Box(Modifier.fillMaxWidth().height(if (notes.size > 1) 92.dp else 80.dp).then(stale)) {
             if (notes.size > 2) Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 18.dp).fillMaxWidth().height(20.dp).clip(RoundedCornerShape(12.dp)).background(white(.06f)))
             if (notes.size > 1) Box(Modifier.align(Alignment.BottomCenter).padding(horizontal = 9.dp).offset(y = (-6).dp).fillMaxWidth().height(20.dp).clip(RoundedCornerShape(13.dp)).background(white(.10f)))
             Focusable(Modifier.fillMaxWidth().height(80.dp), RoundedCornerShape(14.dp), bg = Color(0xFF332B45), focusedBg = Color(0xFF443A5A),
@@ -524,7 +560,7 @@ private fun HomePage(
         // cameras strip
         if (spec.cameras.isNotEmpty()) {
             // the heading opens the Cameras page (every camera large, up to 3 live, recent snapshots)
-            Focusable(Modifier, RoundedCornerShape(8.dp), bg = Color.Transparent, focusedBg = white(.18f), onOk = onCameras) { f ->
+            Focusable(Modifier, RoundedCornerShape(8.dp), bg = Color.Transparent, focusedBg = white(.18f), requester = back["cameras"], onOk = onCameras) { f ->
                 Text(spec.cameraStatus.ifBlank { "Cameras" } + " ›", color = if (f) Color.White else white(.75f), fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
             }
@@ -534,8 +570,8 @@ private fun HomePage(
                 items(spec.cameras, key = { it.entity }) { c ->
                     Focusable(Modifier.width(84.dp).height(60.dp), RoundedCornerShape(10.dp), bg = Color.Black,
                         requester = if (notes.isEmpty() && c == spec.cameras.first()) first else null, onOk = { onCamera(c.entity) }) { f ->
-                        Net(c.image, Modifier.fillMaxSize(), tick)
-                        if (c.seen.isNotBlank()) Text(c.seen.substringBefore(" ·"), color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold,
+                        Net(c.image, Modifier.fillMaxSize(), tick, widthPx = 320)
+                        if (c.seen.isNotBlank()) Text(c.seen.substringBefore(" ·"), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
                             modifier = Modifier.align(Alignment.TopEnd).padding(3.dp).clip(RoundedCornerShape(50)).background(Color(0xCC7C2D12))
                                 .padding(horizontal = 4.dp, vertical = 1.dp))
                         Text(c.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1,
@@ -558,7 +594,7 @@ private fun HomePage(
         val cu = spec.catchup.flatMap { it.items }
         // TV and Rooms share one row (each half width), so both fit under the cameras and tiles
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (cu.isNotEmpty()) Focusable(Modifier.weight(1f).height(68.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
+        if (cu.isNotEmpty()) Focusable(Modifier.weight(1f).height(68.dp).focusRequester(back.getValue("tv")).then(stale), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
             requester = if (notes.isEmpty() && spec.cameras.isEmpty() && spec.tiles.isEmpty()) first else null, onOk = onCatchup) {
             Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("television_play")), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(Amber))
@@ -573,7 +609,7 @@ private fun HomePage(
             }
         }
         // Rooms: every room's devices, like the main Home Assistant dashboard
-        if (spec.rooms.isNotEmpty()) Focusable(Modifier.weight(1f).height(68.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
+        if (spec.rooms.isNotEmpty()) Focusable(Modifier.weight(1f).height(68.dp).focusRequester(back.getValue("rooms")), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
             requester = if (notes.isEmpty() && spec.cameras.isEmpty() && spec.tiles.isEmpty() && spec.catchup.isEmpty()) first else null, onOk = onRooms) {
             Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("home_outline")), null, Modifier.size(18.dp), colorFilter = ColorFilter.tint(Amber))
@@ -641,6 +677,7 @@ private fun NoteBody(n: CcNotification, compact: Boolean) {
 private fun NotificationsPage(
     notes: List<CcNotification>, onBack: () -> Unit, onOpen: (CcNotification) -> Unit,
     onDismiss: (CcNotification) -> Unit, onClearAll: () -> Unit, onMenu: (CcNotification) -> Unit = {},
+    undo: CcNotification? = null, onUndo: () -> Unit = {},
 ) {
     val first = remember { FocusRequester() }
     var hasFocus by remember { mutableStateOf(false) }
@@ -651,23 +688,36 @@ private fun NotificationsPage(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
             Text("Notifications", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            Focusable(Modifier.height(24.dp), RoundedCornerShape(12.dp), requester = if (notes.isEmpty()) first else null, onOk = onClearAll) {
-                Text("Clear all", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center).padding(horizontal = 10.dp))
+            Focusable(Modifier.height(32.dp), RoundedCornerShape(16.dp), requester = if (notes.isEmpty()) first else null, onOk = onClearAll) {
+                Text("Clear all", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.align(Alignment.Center).padding(horizontal = 10.dp))
             }
         }
         Spacer(Modifier.height(12.dp))
+        undo?.let { UndoRow(it, onUndo) }
         if (notes.isEmpty()) Text("You're all caught up", color = white(.5f), fontSize = 12.sp)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(4.dp)) {
             itemsIndexed(notes, key = { _, n -> n.id }) { i, n ->
                 Focusable(Modifier.fillMaxWidth().height(70.dp), RoundedCornerShape(14.dp), bg = white(.08f), focusedBg = white(.20f),
                     requester = if (i == 0) first else null,
-                    onKey = { e -> if ((e.key == Key.DirectionLeft || e.key == Key.DirectionRight) && e.type == KeyEventType.KeyDown && e.nativeKeyEvent.isLongPress.not()) {
-                        // Left / right dismisses (like swiping a notification away); keep focus on the list
-                        onDismiss(n); true } else false },
+                    onKey = { e -> if ((e.key == Key.DirectionLeft || e.key == Key.DirectionRight) && e.type == KeyEventType.KeyDown) {
+                        // Left / right dismisses (like swiping a notification away); keep focus on the list. Only a fresh
+                        // press: holding the key repeats it, which would clear the list one by one.
+                        if (e.nativeKeyEvent.repeatCount == 0) onDismiss(n); true } else false },
                     onLong = { onMenu(n) }, onOk = { onOpen(n) }) { NoteBody(n, compact = false) }
             }
         }
-        Text("OK open · hold OK for options · ◀ ▶ dismiss · Back", color = white(.35f), fontSize = 8.sp, modifier = Modifier.padding(top = 6.dp))
+        Text("OK open · hold OK for options · ◀ ▶ dismiss" + (if (undo != null) " · ▲ undo" else "") + " · Back", color = white(.35f), fontSize = 11.sp,
+            modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
+/** "Dismissed · <title> · OK to undo", for 5 s after a notification is dismissed on the TV (HA hears of it after that). */
+@Composable
+private fun UndoRow(n: CcNotification, onUndo: () -> Unit) {
+    Focusable(Modifier.fillMaxWidth().height(36.dp).padding(bottom = 4.dp), RoundedCornerShape(12.dp), bg = Amber.copy(alpha = .16f),
+        focusedBg = Amber.copy(alpha = .35f), onOk = onUndo) {
+        Text("Dismissed · ${n.title} · OK to undo", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 12.dp))
     }
 }
 
@@ -687,10 +737,10 @@ private val MENU_LABEL = mapOf("seen" to "Watched it", "remind" to "Remind me", 
 private object TvView { var current = "series" }
 private val TV_VIEWS = listOf("series" to "Series", "films" to "Films", "all" to "Everything", "sport" to "Sport")
 private val TV_VIEWS_TAGS = listOf("mine" to "My shows", "foryou" to "Recommended", "all" to "Everything", "sport" to "Sport")
-private fun tvRows(catchup: List<CcSection>, view: String): List<CcSection> =
+internal fun tvRows(catchup: List<CcSection>, view: String): List<CcSection> =
     if (catchup.any { it.views.isNotEmpty() }) catchup.filter { view in it.views }
     else catchup.map { CcSection(it.title, it.items.filter { i -> tvKeep(view, i) }) }.filter { it.items.isNotEmpty() }
-private fun tvKeep(view: String, it: CcCatchupItem) = when (view) {
+internal fun tvKeep(view: String, it: CcCatchupItem) = when (view) {
     "sport" -> it.tag == "sport"
     "mine" -> it.tag == "mine"
     "foryou" -> it.tag == "mine" || it.tag == "pick"
@@ -706,7 +756,7 @@ private fun CatchupPage(
     // in from the right); rows of posters underneath: Up next, On now, Later tonight, New to stream, then the catch-up
     // days. OK does the row's main thing (watch / stream / remind); hold OK for remind / follow / like / not interested.
     // ▲ from the top row reaches the filter chips (Series · Films · Everything · Sport); OK on one switches the
-    // rows. Sport has its own rows (Formula 1, PPV, Soccer, Boxing), TiviMate channels first.
+    // rows. Sport has its own rows (Formula 1, PPV, Soccer, Boxing), live TV channels first.
     val byViews = spec.catchup.any { it.views.isNotEmpty() }
     val views = if (byViews) TV_VIEWS else TV_VIEWS_TAGS
     var view by remember {
@@ -849,7 +899,7 @@ private fun TvMenu(m: CcCatchupItem, onPick: (String) -> Unit) {
                         modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp))
                 }
             }
-            Text("OK choose · Back", color = white(.4f), fontSize = 9.sp, modifier = Modifier.padding(top = 2.dp))
+            Text("OK choose · Back", color = white(.4f), fontSize = 11.sp, modifier = Modifier.padding(top = 2.dp))
         }
     }
 }
@@ -882,7 +932,7 @@ private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: (
             if (it.img != null) Net(it.img, Modifier.fillMaxSize())
             else Text(it.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(10.dp))
             it.badge?.let { b ->
-                Text(b, color = Amber, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                Text(b, color = Amber, fontSize = 10.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(6.dp).clip(RoundedCornerShape(50)).background(Color(0xE6140F1E)).padding(horizontal = 6.dp, vertical = 1.dp))
             }
             it.prog?.let { p ->
@@ -894,7 +944,7 @@ private fun PosterCard(it: CcCatchupItem, requester: FocusRequester?, onFocus: (
         // only the focused card spells everything out; the rest stay quiet so the row is easy to scan
         Text(it.title, color = if (focused) Color.White else white(.8f), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
             overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp))
-        Text(it.sub, color = white(.55f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(it.sub, color = white(.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -1048,14 +1098,14 @@ private fun NoteMenu(n: CcNotification, onPick: (String) -> Unit) {
     Box(Modifier.fillMaxSize().background(Color(0xE6140F22)).padding(14.dp), contentAlignment = Alignment.Center) {
         Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(n.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(n.app, color = white(.55f), fontSize = 10.sp, modifier = Modifier.padding(bottom = 4.dp))
+            Text(n.app, color = white(.55f), fontSize = 11.sp, modifier = Modifier.padding(bottom = 4.dp))
             opts.forEachIndexed { i, (id, label) ->
                 Focusable(Modifier.fillMaxWidth().height(40.dp), RoundedCornerShape(12.dp), requester = if (i == 0) first else null, onOk = { onPick(id) }) {
                     Text(label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp))
                 }
             }
-            Text("OK choose · Back cancel", color = white(.4f), fontSize = 9.sp)
+            Text("OK choose · Back cancel", color = white(.4f), fontSize = 11.sp)
         }
     }
 }
@@ -1077,18 +1127,18 @@ private fun NowMenu(n: CcNow, onPick: (CcPick) -> Unit) {
     Box(Modifier.fillMaxSize().background(Color(0xE6140F22)).padding(14.dp), contentAlignment = Alignment.Center) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(n.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(n.label, color = white(.55f), fontSize = 10.sp, modifier = Modifier.padding(bottom = 4.dp))
+            Text(n.label, color = white(.55f), fontSize = 11.sp, modifier = Modifier.padding(bottom = 4.dp))
             n.streams.forEachIndexed { i, p ->
                 Focusable(Modifier.fillMaxWidth().height(48.dp), RoundedCornerShape(12.dp), bg = if (p.on) Color(0xFF3A3320) else white(.10f),
                     requester = if (i == start) first else null, onKey = swallowHeld, onOk = { onPick(p) }) {
                     Column(Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp)) {
                         Text(p.title, color = if (p.on) Amber else Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                             overflow = TextOverflow.Ellipsis)
-                        if (p.sub.isNotBlank()) Text(p.sub, color = white(.55f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (p.sub.isNotBlank()) Text(p.sub, color = white(.55f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
-            Text("Let go of OK, then pick a stream with ▲ ▼ and OK · Back cancel", color = white(.4f), fontSize = 9.sp)
+            Text("Let go of OK, then pick a stream with ▲ ▼ and OK · Back cancel", color = white(.4f), fontSize = 11.sp)
         }
     }
 }
@@ -1097,7 +1147,7 @@ private fun NowMenu(n: CcNow, onPick: (CcPick) -> Unit) {
  *  in or out, hold OK sets the quantity) and the total. Everything comes from HA (tv_meals.py); presses go back as meals:<...>. */
 @Composable
 private fun MealsPage(
-    m: CcMeals?, tab: Int, onTab: (Int) -> Unit, onAction: (String) -> Unit, overrides: Map<String, Pair<Boolean, Int>>,
+    m: CcMeals?, tab: Int, onTab: (Int) -> Unit, onAction: (String) -> Unit, overrides: MutableMap<String, Pair<Boolean, Int>>,
     onPick: (CcMealNight) -> Unit, onQty: (CcShopItem) -> Unit,
     find: CcFind? = null, searching: String = "", onVoice: () -> Unit = {}, onCloseFind: () -> Unit = {},
 ) {
@@ -1169,7 +1219,7 @@ private fun MealNights(m: CcMeals, onPick: (CcMealNight) -> Unit, onNext: () -> 
                                 if (n.changed) Badge("CHANGED")
                             }
                             Text(when (n.kind) { "takeaway" -> "Nothing to buy"; "leftovers" -> "Nothing to buy"; "empty" -> "OK to pick a dinner"
-                                else -> listOf(n.mins, n.needs.take(4).joinToString(" · ") { shortNeed(it) }).filter { it.isNotBlank() }.joinToString(" · ") },
+                                else -> listOf(n.mins, n.needs.take(4).joinToString(" · ")).filter { it.isNotBlank() }.joinToString(" · ") },
                                 color = white(.6f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
@@ -1195,7 +1245,7 @@ private fun MealNights(m: CcMeals, onPick: (CcMealNight) -> Unit, onNext: () -> 
                     Text(n.name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     if (n.needs.isNotEmpty()) {
                         Text("INGREDIENTS · ${n.needs.size}", color = white(.55f), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
-                        n.needs.take(7).forEach { Text(shortNeed(it), color = white(.85f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        n.needs.take(7).forEach { Text(it, color = white(.85f), fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         if (n.needs.size > 7) Text("+${n.needs.size - 7} more", color = white(.5f), fontSize = 12.sp)
                     }
                 }
@@ -1204,21 +1254,16 @@ private fun MealNights(m: CcMeals, onPick: (CcMealNight) -> Unit, onNext: () -> 
     }
 }
 
-/** "Lean irish beef mince typically 5% fat 350g" -> "Lean irish beef mince" (drops brand prefixes and pack sizes) */
-private fun shortNeed(s: String): String =
-    s.replace(Regex("(?i)^[\\w']+ stores (simply better |deluxe )?"), "").replace(Regex("(?i)\\s+(typically.*|\\d+(\\.\\d+)?\\s*(x\\s*\\d+(\\.\\d+)?\\s*)?(g|kg|ml|l|litre)\\b.*)$"), "")
-        .replaceFirstChar { it.uppercase() }
-
 @Composable
 private fun Badge(t: String) {
-    Text(t, color = Ink, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+    Text(t, color = Ink, fontSize = 10.sp, fontWeight = FontWeight.Bold,
         modifier = Modifier.padding(start = 6.dp).clip(RoundedCornerShape(99.dp)).background(Amber).padding(horizontal = 6.dp, vertical = 1.dp))
 }
 
 private fun eur(v: Double) = "€" + String.format(Locale.UK, "%.2f", v)
 
 @Composable
-private fun ShopReview(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction: (String) -> Unit, onQty: (CcShopItem) -> Unit, onNext: () -> Unit,
+private fun ShopReview(m: CcMeals, ov: MutableMap<String, Pair<Boolean, Int>>, onAction: (String) -> Unit, onQty: (CcShopItem) -> Unit, onNext: () -> Unit,
                        find: CcFind? = null, searching: String = "", onVoice: () -> Unit = {}, onCloseFind: () -> Unit = {}) {
     var sec by remember { mutableStateOf(m.sections.firstOrNull { it.id == "week" }?.id ?: m.sections.firstOrNull()?.id) }
     val secReq = remember(m.sections.size) { m.sections.map { FocusRequester() } }
@@ -1262,7 +1307,7 @@ private fun ShopReview(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction
                     items(s.items, key = { x -> x.id + s.id }) { item ->
                         val isOn = on(item); val qq = q(item)
                         Focusable(Modifier.fillMaxWidth().height(48.dp), RoundedCornerShape(12.dp), bg = if (isOn) white(.09f) else white(.03f),
-                            onLong = { onQty(item) }, onOk = { onAction("meals:item:${item.id}:${if (isOn) 0 else 1}"); (ov as? MutableMap)?.put(item.id, !isOn to qq) }) {
+                            onLong = { onQty(item) }, onOk = { onAction("meals:item:${item.id}:${if (isOn) 0 else 1}"); ov[item.id] = !isOn to qq }) {
                             Row(Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(22.dp).clip(RoundedCornerShape(7.dp)).background(if (isOn) Amber else Color.Transparent)
                                     .border(2.dp, if (isOn) Amber else white(.5f), RoundedCornerShape(7.dp)), contentAlignment = Alignment.Center) {
@@ -1286,7 +1331,7 @@ private fun ShopReview(m: CcMeals, ov: Map<String, Pair<Boolean, Int>>, onAction
 }
 
 /** Spoken words -> a search: lower case, letters / digits / & / -, no "add" / "please", at most 40 characters (as HA accepts). */
-private fun cleanSpoken(t: String): String =
+internal fun cleanSpoken(t: String): String =
     t.lowercase(Locale.UK).replace(Regex("[^a-z0-9 &-]"), " ").replace(Regex("^\\s*(please\\s+)?(add|search for|search|find|get|buy)\\s+(some\\s+)?"), "")
         .replace(Regex("\\s+(please|to the list|to my list)\\s*$"), "").replace(Regex("\\s+"), " ").trim().take(40).trim()
 
@@ -1321,7 +1366,7 @@ private fun VoiceBubble(v: CcVoice.Ui, modifier: Modifier) {
 /** Search results on Review shopping: what is already on the list (OK ticks it in / out), then products to add (past orders
  *  first, then the shop's catalogue, then a live shop lookup), and "Add <words> as said". Adds go under "Added by you". */
 @Composable
-private fun FindResults(m: CcMeals, f: CcFind?, searching: String, ov: Map<String, Pair<Boolean, Int>>, onAction: (String) -> Unit,
+private fun FindResults(m: CcMeals, f: CcFind?, searching: String, ov: MutableMap<String, Pair<Boolean, Int>>, onAction: (String) -> Unit,
                         onVoice: () -> Unit, onClose: () -> Unit) {
     val first = remember { FocusRequester() }
     val added = remember(f?.q) { mutableStateListOf<Int>() }
@@ -1350,7 +1395,7 @@ private fun FindResults(m: CcMeals, f: CcFind?, searching: String, ov: Map<Strin
                 val it0 = items[o.id]; val isOn = ov[o.id]?.first ?: it0?.on ?: o.on; val qq = ov[o.id]?.second ?: it0?.q ?: 1
                 FindRow(if (isOn) "check" else null, o.name, (if (isOn) "" else "Not this time · ") + o.where, if (isOn && it0 != null && !it0.unpriced) eur(it0.price * qq) else "",
                     on = isOn, requester = if (firstAt == "on$idx") first else null) {
-                    onAction("meals:item:${o.id}:${if (isOn) 0 else 1}"); (ov as? MutableMap)?.put(o.id, !isOn to qq)
+                    onAction("meals:item:${o.id}:${if (isOn) 0 else 1}"); ov[o.id] = !isOn to qq
                 }
             }
         }
@@ -1522,20 +1567,20 @@ private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emp
             if (parts.size > 1) Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 parts.forEachIndexed { i, (name, p) ->
                     val hi = i == sel && (ct == null || !ct.on)
-                    Column(Modifier.width(86.dp).clip(RoundedCornerShape(12.dp)).background(if (i == sel) Color.White else white(.12f))
+                    Column(Modifier.width(104.dp).clip(RoundedCornerShape(12.dp)).background(if (i == sel) Color.White else white(.12f))
                         .border(if (hi) 2.dp else 0.dp, if (hi) Amber else Color.Transparent, RoundedCornerShape(12.dp))
                         .padding(horizontal = 8.dp, vertical = 6.dp)) {
-                        Text(if (i == 0) "All" else name, color = if (i == sel) Ink else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                        Text(if (i == 0) "All" else name, color = if (i == sel) Ink else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                         val k = ct?.parts?.getOrNull(i) ?: 0
                         Text((if (p == 0) "Off" else "$p%") + (if (ct != null && k > 0) " · ${ctName(k, ct.kmin, ct.kmax)}" else ""),
-                            color = if (i == sel) Ink.copy(alpha = .6f) else white(.6f), fontSize = 9.sp, maxLines = 1)
+                            color = if (i == sel) Ink.copy(alpha = .6f) else white(.6f), fontSize = 11.sp, maxLines = 1)
                     }
                 }
             }
             // colour: a thin warm-to-cool strip with the presets under it; the dot is where the light is
             if (ct != null) {
-                val w = if (parts.size > 1) (86 * parts.size + 6 * (parts.size - 1)).dp else 220.dp
+                val w = if (parts.size > 1) (104 * parts.size + 6 * (parts.size - 1)).dp else 220.dp
                 val lo = ctPreset(0, ct.kmin, ct.kmax)   // the strip runs Warm to Cool, like the presets under it
                 val f = ((ct.k - lo).toFloat() / (ct.kmax - lo).coerceAtLeast(1)).coerceIn(0f, 1f)
                 Box(Modifier.padding(top = 16.dp).width(w).height(16.dp), contentAlignment = Alignment.CenterStart) {
@@ -1547,14 +1592,14 @@ private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emp
                 Row(Modifier.width(w).padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                     val here = ctName(ct.k, ct.kmin, ct.kmax)
                     CT_PRESETS.forEach { n ->
-                        Text(n, color = if (n == here) (if (ct.on) Amber else Color.White) else white(.45f), fontSize = 10.sp,
+                        Text(n, color = if (n == here) (if (ct.on) Amber else Color.White) else white(.45f), fontSize = 11.sp,
                             fontWeight = if (n == here) FontWeight.Bold else FontWeight.Normal)
                     }
                 }
             }
             Text(if (ct != null && ct.on) "◀ ▶ warmer / cooler · ▲ ▼ brightness · OK " + (if (parts.size > 1) "pick a light" else "back") + " · Back done"
                  else (if (parts.size > 1) "◀ ▶ pick a light · " else "") + "▲ ▼ adjust · " + (if (ct != null) "OK colour · Back done" else "OK done"),
-                color = white(.5f), fontSize = 9.sp, modifier = Modifier.padding(top = 12.dp))
+                color = white(.5f), fontSize = 11.sp, modifier = Modifier.padding(top = 12.dp))
         }
     }
 }
@@ -1563,14 +1608,14 @@ private fun Dimmer(title: String, pct: Int, parts: List<Pair<String, Int>> = emp
 private data class CtView(val on: Boolean, val k: Int, val kmin: Int, val kmax: Int, val parts: List<Int>)
 
 // Same names and spacing as the room card: four presets evenly over the light's range
-private val CT_PRESETS = listOf("Warm", "Soft", "Neutral", "Cool")
+internal val CT_PRESETS = listOf("Warm", "Soft", "Neutral", "Cool")
 // Warm starts at 2700 K (a normal warm-white bulb), not the light's very warmest (some lights go down to 2200 K)
-private const val CT_WARM = 2700
-private fun ctPreset(i: Int, kmin: Int, kmax: Int): Int {
+internal const val CT_WARM = 2700
+internal fun ctPreset(i: Int, kmin: Int, kmax: Int): Int {
     val lo = if (kmax > CT_WARM) maxOf(kmin, CT_WARM) else kmin
     return ((lo + (kmax - lo) * i / 3.0) / 100).roundToInt() * 100
 }
-private fun ctName(k: Int, kmin: Int, kmax: Int): String =
+internal fun ctName(k: Int, kmin: Int, kmax: Int): String =
     CT_PRESETS[CT_PRESETS.indices.minByOrNull { kotlin.math.abs(ctPreset(it, kmin, kmax) - k) } ?: 0]
 
 /** Rough colour of white light at [k] kelvin (Tanner Helland's fit), for the colour pill. */
@@ -1597,7 +1642,7 @@ private fun WakeWait(s: Int) {
         Text(when { s < 0 -> "The video didn't start"; late -> "Couldn't wake the doorbell"; s == 0 -> "Connecting…"; else -> "Waking the doorbell…" },
             color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
         Text(when { s < 0 || late -> "OK on the tile to close, then try again"; s == 0 -> "Starting the video"; else -> "Usually 10–20 seconds · ${s}s" },
-            color = white(.6f), fontSize = 10.sp, modifier = Modifier.padding(top = 3.dp))
+            color = white(.6f), fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp))
     }
 }
 
@@ -1656,9 +1701,9 @@ private fun LiveCamera(entity: String, name: String, rtsp: String, modifier: Mod
         Row(Modifier.padding(start = 18.dp, top = 16.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
             .padding(horizontal = 9.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).background(Color(0xFFEF4444)))
-            Text("  $name · live", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text("  $name · live", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
-        Text("Back: keep watching in the corner · OK on the tile: close", color = white(.85f), fontSize = 8.sp,
+        Text("Back: keep watching in the corner · OK on the tile: close", color = white(.85f), fontSize = 11.sp,
             modifier = Modifier.align(Alignment.BottomStart).padding(start = 18.dp, bottom = 14.dp)
                 .clip(RoundedCornerShape(50)).background(Color(0x99000000)).padding(horizontal = 8.dp, vertical = 2.dp))
     }
@@ -1690,14 +1735,14 @@ private fun CamerasPage(spec: ControlCenterSpec, onAction: (String) -> Unit, onK
         Focusable(modifier, RoundedCornerShape(if (big) 16.dp else 12.dp), bg = Color.Black, focusedBg = Color.Black,
             requester = req(c.entity), onOk = { lastOk = c.entity; toggle(c.entity) }) {
             if (on) CamVideo(c.entity, c.rtspSub.ifBlank { c.rtsp }, Modifier.fillMaxSize(), wake = c.wake, awake = c.awake, onAction = onAction)
-            else Net(c.image, Modifier.fillMaxSize(), tick)
+            else Net(c.image, Modifier.fillMaxSize(), tick, widthPx = if (big) 960 else 480)
             Row(Modifier.align(Alignment.TopStart).padding(6.dp).clip(RoundedCornerShape(50)).background(Color(0x99000000))
                 .padding(horizontal = 7.dp, vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (on) Box(Modifier.size(6.dp).clip(RoundedCornerShape(50)).background(Color(0xFFEF4444)))
                 Text((if (on) " " else "") + c.name + (if (on) " · live" else ""), color = Color.White,
-                    fontSize = if (big) 12.sp else 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    fontSize = if (big) 13.sp else 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
             }
-            if (c.seen.isNotBlank()) Text(c.seen, color = Color.White, fontSize = if (big) 11.sp else 9.sp, maxLines = 1,
+            if (c.seen.isNotBlank()) Text(c.seen, color = Color.White, fontSize = if (big) 12.sp else 10.sp, maxLines = 1,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(50))
                     .background(Color(0xCC7C2D12)).padding(horizontal = 7.dp, vertical = 2.dp))
         }
@@ -1740,8 +1785,8 @@ private fun CamerasPage(spec: ControlCenterSpec, onAction: (String) -> Unit, onK
                 items(spec.snaps, key = { it.image }) { sn ->
                     Focusable(Modifier.width(170.dp).fillMaxHeight(), RoundedCornerShape(12.dp), bg = Color.Black,
                         onOk = { if (sn.entity !in live) { lastOk = sn.entity; toggle(sn.entity) } }) {
-                        Net(sn.image, Modifier.fillMaxSize())
-                        Text("${sn.what} · ${sn.cam} · ${sn.at}", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                        Net(sn.image, Modifier.fillMaxSize(), widthPx = 360)
+                        Text("${sn.what} · ${sn.cam} · ${sn.at}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x99000000)).padding(horizontal = 6.dp, vertical = 3.dp))
                     }

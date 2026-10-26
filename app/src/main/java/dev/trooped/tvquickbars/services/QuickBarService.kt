@@ -181,7 +181,7 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
     private var doublePressPendingKeyCode: Int = -1
 
     /** Threshold (ms) to consider a press a long-press. */
-    private val longPressTimeout: Long = 750
+    private val longPressTimeout: Long = 500   // Android's own long-press time (was 750 ms, which made held buttons feel slow)
 
     /**
      * Records ACTION_DOWN timestamps for keys so we can compute hold duration on ACTION_UP,
@@ -386,9 +386,8 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
         const val EXTRA_CAMERA_SPEC = "CAMERA_SPEC"
 
         fun handleControlCenterFromHa(data: org.json.JSONObject) {
-            serviceInstance?.runOnMain {
-                serviceInstance?.controlCenter?.handle(data)
-            } ?: Log.w("QuickBarService", "Service not running; control center ignored")
+            // parsed off the main thread by the controller (the data can be a few hundred KB)
+            serviceInstance?.controlCenter?.handle(data) ?: Log.w("QuickBarService", "Service not running; control center ignored")
         }
 
         fun handleNotificationFromHa(spec: NotificationSpec) {
@@ -482,7 +481,7 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
                     sizePxW = bigW, sizePxH = bigW?.let { it * 9 / 16 },
                     customTitle = if (rtsp != null) name.ifBlank { entity.substringAfter('.').replace('_', ' ').replaceFirstChar { it.uppercase() } } else null,
                     muteAudio = if (rtsp != null) true else null, rtspLatency = if (rtsp != null) "low" else null)) },
-        ).also { it.onServiceConnected() }
+        ).also { it.onServiceConnected(); it.prepare() }
 
         camera = CameraPipController(
             context = this,
@@ -567,7 +566,7 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
         }
 
         // Camera PiP on screen: Back closes it (the PiP window is not focusable so the app underneath keeps the remote,
-        // which means Back would otherwise go to TiviMate). Only the first Back is taken; with no PiP, Back passes through.
+        // which means Back would otherwise go to the live TV app). Only the first Back is taken; with no PiP, Back passes through.
         if (keyCode == KeyEvent.KEYCODE_BACK && this::camera.isInitialized && camera.isShowing) {
             if (event.action == KeyEvent.ACTION_UP) camera.hide()
             return true
@@ -1028,6 +1027,9 @@ class QuickBarService : AccessibilityService(), HomeAssistantListener {
             }
             launchPackage(targetPackage)
         } else if (actionType == "entity") {
+            // A button that runs HA's Control Center script (script.*control_center): open the panel now with what it showed
+            // last; the script's data fills it in a moment later instead of the panel waiting for the round trip to HA.
+            if (actionId.startsWith("script.") && actionId.endsWith("control_center")) controlCenter?.openNow()
             triggerEntity(actionId)
         }
         else if (actionType == "camera_pip") {

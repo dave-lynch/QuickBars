@@ -678,7 +678,7 @@ private fun ImageOnlyOverlay(
     val (abs, isHaImg) = remember(imageUrl) { resolveAgainstHaBase(ctx, imageUrl) }
     val token = remember(isHaImg) { if (isHaImg) SecurePrefsManager.getHAToken(ctx) else null }
     // The window must open at its final size: an overlay window that grows after it is shown can have its first
-    // buffer stretched (seen on a Shield as a smeared bar). Use the hint from HA, else assume a 5:1 banner.
+    // buffer stretched (seen on a TV box as a smeared bar). Use the hint from HA, else assume a 5:1 banner.
     var aspect by remember(imageUrl) { mutableStateOf(aspectHint ?: 5f) }
     var visible by remember(imageUrl) { mutableStateOf(false) }
     val alpha by animateFloatAsState(targetValue = if (visible) 1f else 0f, animationSpec = tween(220), label = "imgOnlyAlpha")

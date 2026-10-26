@@ -104,6 +104,10 @@ data class ControlCenterSpec(
     val meals: CcMeals? = null,
 ) {
     companion object {
+        /** Nothing from HA yet (the panel opened from the remote before HA's first answer): clock, empty cards. */
+        val EMPTY = ControlCenterSpec(action = "open", page = "home", subtitle = "", now = null, notifications = emptyList(),
+            cameras = emptyList(), cameraStatus = "", tiles = emptyList(), catchup = emptyList())
+
         fun parse(o: JSONObject): ControlCenterSpec = ControlCenterSpec(
             action = o.optString("action", "open").ifBlank { "open" },
             page = o.optString("page", "home").ifBlank { "home" },
