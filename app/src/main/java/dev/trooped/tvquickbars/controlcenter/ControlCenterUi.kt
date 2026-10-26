@@ -660,10 +660,15 @@ private fun okLabel(ok: String) = when {
 }
 private val MENU_LABEL = mapOf("remind" to "Remind me", "follow" to "Follow", "like" to "Like", "dislike" to "Not interested")
 
-/** TV page filter, remembered while the app runs: "mine" = My shows, "foryou" = mine + recommended, "all" = everything,
- *  "sport" = the Sport rows (Formula 1, PPV, Soccer, Boxing; items tagged "sport", shown only there). */
-private object TvView { var current = "mine" }
-private val TV_VIEWS = listOf("mine" to "My shows", "foryou" to "Recommended", "all" to "Everything", "sport" to "Sport")
+/** TV page filter, remembered while the app runs. When HA sends rows with "views": Series / Films (yours first, then
+ *  what's on, then picks for you), Everything (the whole guide) and Sport; each row lists the chips that show it.
+ *  Older HA data without views: "mine" = My shows, "foryou" = mine + recommended, "all", "sport" by item tag. */
+private object TvView { var current = "series" }
+private val TV_VIEWS = listOf("series" to "Series", "films" to "Films", "all" to "Everything", "sport" to "Sport")
+private val TV_VIEWS_TAGS = listOf("mine" to "My shows", "foryou" to "Recommended", "all" to "Everything", "sport" to "Sport")
+private fun tvRows(catchup: List<CcSection>, view: String): List<CcSection> =
+    if (catchup.any { it.views.isNotEmpty() }) catchup.filter { view in it.views }
+    else catchup.map { CcSection(it.title, it.items.filter { i -> tvKeep(view, i) }) }.filter { it.items.isNotEmpty() }
 private fun tvKeep(view: String, it: CcCatchupItem) = when (view) {
     "sport" -> it.tag == "sport"
     "mine" -> it.tag == "mine"
@@ -679,14 +684,20 @@ private fun CatchupPage(
     // Apple TV style: the focused programme fills the top (big title, where and when, description, its artwork fading
     // in from the right); rows of posters underneath: Up next, On now, Later tonight, New to stream, then the catch-up
     // days. OK does the row's main thing (watch / stream / remind); hold OK for remind / follow / like / not interested.
-    // ▲ from the top row reaches the filter chips (My shows · Recommended · Everything · Sport); OK on one switches the
+    // ▲ from the top row reaches the filter chips (Series · Films · Everything · Sport); OK on one switches the
     // rows. Sport has its own rows (Formula 1, PPV, Soccer, Boxing), TiviMate channels first.
+    val byViews = spec.catchup.any { it.views.isNotEmpty() }
+    val views = if (byViews) TV_VIEWS else TV_VIEWS_TAGS
     var view by remember {
-        mutableStateOf(TvView.current.let { v -> if (v == "mine" && spec.catchup.none { s -> s.items.any { it.tag == "mine" } }) "foryou" else v })
+        mutableStateOf(TvView.current.let { v ->
+            when {
+                views.none { it.first == v } -> views[0].first
+                v == "mine" && spec.catchup.none { s -> s.items.any { it.tag == "mine" } } -> "foryou"
+                else -> v
+            }
+        })
     }
-    val shown = remember(spec.catchup, view) {
-        spec.catchup.map { CcSection(it.title, it.items.filter { i -> tvKeep(view, i) }) }.filter { it.items.isNotEmpty() }
-    }
+    val shown = remember(spec.catchup, view) { tvRows(spec.catchup, view) }
     var sel by remember { mutableStateOf(shown.firstOrNull()?.items?.firstOrNull()) }
     var selDay by remember { mutableStateOf(shown.firstOrNull()?.title ?: "") }
     LaunchedEffect(view) { sel = shown.firstOrNull()?.items?.firstOrNull(); selDay = shown.firstOrNull()?.title ?: "" }
@@ -717,11 +728,11 @@ private fun CatchupPage(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(painterResource(ccIcon("chevron_left")), null, Modifier.size(22.dp), colorFilter = ColorFilter.tint(Amber))
                 Text("TV", color = white(.85f), fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 6.dp))
-                TV_VIEWS.forEach { (v, label) ->
+                views.forEach { (v, label) ->
                     val on = view == v
                     Focusable(Modifier.padding(start = 8.dp).height(30.dp), RoundedCornerShape(50),
                         bg = if (on) Amber else white(.10f), focusedBg = if (on) Amber else white(.30f),
-                        requester = if (v == TV_VIEWS[0].first) chip else null,
+                        requester = if (v == views[0].first) chip else null,
                         onOk = { view = v; TvView.current = v }) {
                         Text(label, color = if (on) Ink else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold,
                             modifier = Modifier.align(Alignment.Center).padding(horizontal = 14.dp))
@@ -759,6 +770,7 @@ private fun CatchupPage(
             }
             if (shown.isEmpty()) Text(when (view) {
                     "mine" -> "Nothing from your shows right now · press ▲ and pick Recommended"
+                    "series", "films" -> "Nothing here yet · press ▲ and pick Everything"
                     "sport" -> "No Formula 1, PPV, soccer or boxing on your channels in the next 3 days"
                     else -> "Nothing here yet"
                 },
