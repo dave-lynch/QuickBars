@@ -22,6 +22,17 @@ class ControlCenterHelpersTest {
         assertEquals(2000, ctPreset(0, 2000, 2600))
     }
 
+    @Test fun sportStripGroups() {
+        val item = CcCatchupItem("1", "t", "", null, null, null, "", "")
+        val rows = listOf(CcSection("Live now", listOf(item), listOf("sport"), "Top"), CcSection("F1 races", listOf(item), listOf("sport"), "Formula 1"),
+            CcSection("Drivers' championship", listOf(item), listOf("sport"), "Formula 1"), CcSection("Soccer", listOf(item), listOf("sport"), "Soccer"))
+        assertEquals(listOf("Top", "Formula 1", "Soccer"), sportGroups(rows))
+        assertEquals(listOf("F1 races", "Drivers' championship"), sportRows(rows, "Formula 1").map { it.title })
+        assertEquals(listOf("Live now"), sportRows(rows, "gone").map { it.title })          // a sport no longer sent: the first
+        val old = listOf(CcSection("Soccer", listOf(item), listOf("sport")))                // older HA without groups: no strip
+        assertEquals(old, sportRows(old, "Soccer"))
+    }
+
     @Test fun tvFilterByViews() {
         val item = CcCatchupItem("1", "t", "", null, null, null, "", "")
         val rows = listOf(CcSection("Series on now", listOf(item), listOf("series", "all")), CcSection("Sport", listOf(item), listOf("sport")))

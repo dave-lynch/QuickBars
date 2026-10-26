@@ -734,12 +734,21 @@ private val MENU_LABEL = mapOf("seen" to "Watched it", "remind" to "Remind me", 
 /** TV page filter, remembered while the app runs. When HA sends rows with "views": Series / Films (yours first, then
  *  what's on, then picks for you), Everything (the whole guide) and Sport; each row lists the chips that show it.
  *  Older HA data without views: "mine" = My shows, "foryou" = mine + recommended, "all", "sport" by item tag. */
-private object TvView { var current = "series" }
+private object TvView { var current = "series"; var sport = "" }
 private val TV_VIEWS = listOf("series" to "Series", "films" to "Films", "all" to "Everything", "sport" to "Sport")
 private val TV_VIEWS_TAGS = listOf("mine" to "My shows", "foryou" to "Recommended", "all" to "Everything", "sport" to "Sport")
 internal fun tvRows(catchup: List<CcSection>, view: String): List<CcSection> =
     if (catchup.any { it.views.isNotEmpty() }) catchup.filter { view in it.views }
     else catchup.map { CcSection(it.title, it.items.filter { i -> tvKeep(view, i) }) }.filter { it.items.isNotEmpty() }
+/** The sports strip on the left of the Sport view: the rows' groups in order ("Top", "Formula 1", "Soccer"...), shown
+ *  only when HA sends more than one; sportRows keeps the rows of the picked one (or the first, when it's gone). */
+internal fun sportGroups(rows: List<CcSection>): List<String> = rows.map { it.group }.filter { it.isNotBlank() }.distinct()
+internal fun sportRows(rows: List<CcSection>, group: String): List<CcSection> {
+    val groups = sportGroups(rows)
+    if (groups.size < 2) return rows
+    val g = if (group in groups) group else groups[0]
+    return rows.filter { it.group == g }
+}
 internal fun tvKeep(view: String, it: CcCatchupItem) = when (view) {
     "sport" -> it.tag == "sport"
     "mine" -> it.tag == "mine"
@@ -768,10 +777,15 @@ private fun CatchupPage(
             }
         })
     }
-    val shown = remember(spec.catchup, view) { tvRows(spec.catchup, view) }
+    val all = remember(spec.catchup, view) { tvRows(spec.catchup, view) }
+    // Sport: a strip of sports down the left (Top, Formula 1, Soccer...); moving onto one shows its rows
+    val groups = remember(all, view) { if (view == "sport") sportGroups(all) else emptyList() }
+    var group by remember { mutableStateOf(TvView.sport) }
+    val strip = groups.size > 1
+    val shown = remember(all, group, strip) { if (strip) sportRows(all, group) else all }
     var sel by remember { mutableStateOf(shown.firstOrNull()?.items?.firstOrNull()) }
     var selDay by remember { mutableStateOf(shown.firstOrNull()?.title ?: "") }
-    LaunchedEffect(view) { sel = shown.firstOrNull()?.items?.firstOrNull(); selDay = shown.firstOrNull()?.title ?: "" }
+    LaunchedEffect(view, group) { sel = shown.firstOrNull()?.items?.firstOrNull(); selDay = shown.firstOrNull()?.title ?: "" }
     val chip = remember { FocusRequester() }
     var toast by remember { mutableStateOf("") }
     LaunchedEffect(toast) { if (toast.isNotEmpty()) { delay(3_000); toast = "" } }
@@ -835,7 +849,8 @@ private fun CatchupPage(
                         val l = okLabel(s.ok)
                         if (l.isNotEmpty()) Text("OK  $l", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(end = 10.dp).clip(RoundedCornerShape(50)).background(Amber).padding(horizontal = 14.dp, vertical = 5.dp))
-                        Text((if (s.menu.isNotEmpty()) "hold OK for more · " else "") + "◀ ▶ programmes · ▲ ▼ rows · ▲ at top: filter · Back", color = white(.5f), fontSize = 11.sp)
+                        Text((if (s.menu.isNotEmpty()) "hold OK for more · " else "") + "◀ ▶ programmes · ▲ ▼ rows · ▲ at top: filter · " +
+                            (if (strip) "◀ at the start: sports · " else "") + "Back", color = white(.5f), fontSize = 11.sp)
                     }
                 }
             }
@@ -846,8 +861,22 @@ private fun CatchupPage(
                     else -> "Nothing here yet"
                 },
                 color = white(.6f), fontSize = 16.sp, modifier = Modifier.padding(top = 12.dp))
-            LazyColumn(Modifier.weight(1f).padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                itemsIndexed(shown, key = { _, sec -> view + sec.title }) { si, sec ->
+            Row(Modifier.weight(1f).padding(top = 10.dp)) {
+            if (strip) Column(Modifier.width(150.dp).padding(end = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val cur = if (group in groups) group else groups[0]
+                groups.forEach { g ->
+                    val on = g == cur
+                    Focusable(Modifier.fillMaxWidth().height(36.dp), RoundedCornerShape(12.dp),
+                        bg = if (on) Amber else white(.08f), focusedBg = if (on) Amber else white(.26f),
+                        onOk = { group = g; TvView.sport = g }) { f ->
+                        LaunchedEffect(f) { if (f && group != g) { group = g; TvView.sport = g } }
+                        Text(g, color = if (on) Ink else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 12.dp))
+                    }
+                }
+            }
+            LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                itemsIndexed(shown, key = { _, sec -> view + sec.group + sec.title }) { si, sec ->
                     Column {
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text(sec.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -863,6 +892,7 @@ private fun CatchupPage(
                     }
                 }
             }
+            }   // strip + rows
         }
         menu?.let { m ->
             TvMenu(m, onPick = { act ->

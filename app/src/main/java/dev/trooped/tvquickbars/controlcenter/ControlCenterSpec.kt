@@ -64,8 +64,9 @@ data class CcCatchupItem(
     /** TV page filter: "mine" (followed / reminded / liked / watching), "pick" (recommended) or "" */
     val tag: String = "",
 )
-/** views: the TV page filter chips that show this row ("series", "films", "all", "sport"); empty = filter by item tag */
-data class CcSection(val title: String, val items: List<CcCatchupItem>, val views: List<String> = emptyList())
+/** views: the TV page filter chips that show this row ("series", "films", "all", "sport"); empty = filter by item tag.
+ *  group: under Sport, the entry in the sports strip on the left that shows this row ("Top", "Formula 1", "Soccer"...). */
+data class CcSection(val title: String, val items: List<CcCatchupItem>, val views: List<String> = emptyList(), val group: String = "")
 /** 24-hour temperature of a room (hourly averages in `points`, oldest first; low / high with their times) */
 data class CcTemp(val now: String, val low: String, val lowAt: String, val high: String, val highAt: String, val hum: String,
                   val points: List<Float>)
@@ -147,7 +148,7 @@ data class ControlCenterSpec(
                         menu = it.optString("menu").split(",").map { m -> m.trim() }.filter { m -> m.isNotEmpty() },
                         tag = it.optString("tag"),
                     )
-                }, s.optJSONArray("views").strings())
+                }, s.optJSONArray("views").strings(), s.optString("group"))
             },
             rooms = o.optJSONArray("rooms").objects().map { room(it) },
             meals = o.optJSONObject("meals")?.takeIf { it.has("nights") }?.let { meals(it) },
