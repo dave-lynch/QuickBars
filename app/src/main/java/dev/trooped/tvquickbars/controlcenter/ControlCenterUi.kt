@@ -194,6 +194,7 @@ fun ControlCenterRoot(
     var mealTab by remember { mutableIntStateOf(0) }
     var mealsFrom by remember { mutableStateOf("room") }   // Back from Dinners & shopping: the Kitchen room, or the notifications
     var noteMenu by remember { mutableStateOf<CcNotification?>(null) }   // hold OK on a notification
+    var nowMenu by remember { mutableStateOf<CcNow?>(null) }   // the Now Playing picker (hold OK on the card)
     var mealPick by remember { mutableStateOf<CcMealNight?>(null) }
     var mealQty by remember { mutableStateOf<CcShopItem?>(null) }
     var mealQtyVal by remember { mutableIntStateOf(1) }
@@ -237,6 +238,7 @@ fun ControlCenterRoot(
                  if (page == "catchup" && tvMenu != null) { tvMenu = null; return }
                  if (page == "meals" && mealPick != null) { mealPick = null; return }
                  if (noteMenu != null) { noteMenu = null; return }
+                 if (nowMenu != null) { nowMenu = null; return }
                  page = when (page) { "catchup" -> if (spec.page == "catchup") "close" else catchupFrom; "notifications" -> "home"
                                       "room" -> "rooms"; "rooms" -> "home"; "cameras" -> "home"; "meals" -> mealsFrom; else -> "close" }
                  if (page == "close") onClose() }
@@ -433,9 +435,10 @@ fun ControlCenterRoot(
                     onCatchup = { catchupFrom = "home"; page = "catchup" }, onRooms = { room = null; page = "rooms" },
                     onCameras = { live = null; page = "cameras" },
                     openGroup = openGroup, onGroup = { openGroup = if (openGroup == it) null else it }, onAction = onAction, onCamera = { live = if (live == it) null else it },
-                    onDim = { openDim(it) })
+                    onDim = { openDim(it) }, onNowMenu = { nowMenu = it })
                 dim?.let { Dimmer(it.title, dimPct, dimTargets.mapIndexed { i, t -> t.title to shown(i) }, dimSel,
                     ct = if (hasCt(it)) CtView(ctMode, ctK, it.kmin, it.kmax, dimTargets.indices.map { i -> shownCt(i) }) else null) }
+                nowMenu?.let { n -> NowMenu(n, onPick = { id -> nowMenu = null; onAction(id) }) }
                 noteMenu?.let { n -> NoteMenu(n, onPick = { a -> noteMenu = null
                     when (a) {
                         "dismiss" -> dismiss(n)
@@ -453,7 +456,7 @@ private fun HomePage(
     spec: ControlCenterSpec, notes: List<CcNotification>,
     onOpenStack: () -> Unit, onOpen: (CcNotification) -> Unit, onAction: (String) -> Unit, onCamera: (String) -> Unit, onMenu: (CcNotification) -> Unit = {},
     onDim: (CcTile) -> Unit = {}, onCatchup: () -> Unit = {}, onRooms: () -> Unit = {}, onCameras: () -> Unit = {},
-    openGroup: String? = null, onGroup: (String) -> Unit = {},
+    openGroup: String? = null, onGroup: (String) -> Unit = {}, onNowMenu: (CcNow) -> Unit = {},
 ) {
     var clock by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { while (true) { clock = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()); delay(10_000) } }
@@ -473,14 +476,20 @@ private fun HomePage(
         Text(clock, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
         if (spec.subtitle.isNotBlank()) Text(spec.subtitle, color = white(.65f), fontSize = 14.sp, modifier = Modifier.offset(y = (-8).dp))
         spec.now?.let { n ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(white(.08f)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Net(n.image, Modifier.size(70.dp, 40.dp).clip(RoundedCornerShape(8.dp)))
+            @Composable fun body() = Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Net(n.image, Modifier.size(70.dp, 40.dp).clip(RoundedCornerShape(8.dp)), crop = ContentScale.Fit)
                 Column(Modifier.padding(start = 10.dp)) {
                     Text(n.label, color = Amber, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     Text(n.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (n.sub.isNotBlank()) Text(n.sub, color = white(.6f), fontSize = 12.sp, maxLines = 1)
+                    if (n.sub.isNotBlank()) Text(n.sub, color = white(.6f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            // OK sends what HA set (e.g. the live channel's next stream); hold OK opens the picker. Up from the notifications reaches it.
+            if (n.ok.isNotBlank() || n.streams.isNotEmpty())
+                Focusable(Modifier.fillMaxWidth(), RoundedCornerShape(14.dp), bg = white(.08f),
+                    onLong = if (n.streams.isNotEmpty()) ({ onNowMenu(n) }) else null,
+                    onOk = { if (n.ok.isNotBlank()) onAction(n.ok) else onNowMenu(n) }) { body() }
+            else Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(white(.08f))) { body() }
         }
         // notification stack (collapsed): top card + two edges peeking behind
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1035,6 +1044,31 @@ private fun NoteMenu(n: CcNotification, onPick: (String) -> Unit) {
                 }
             }
             Text("OK choose · Back cancel", color = white(.4f), fontSize = 9.sp)
+        }
+    }
+}
+/** The Now Playing picker (hold OK on the card): HA's choices, e.g. every stream of the live channel with its playlist; the one
+ *  playing now is marked and focused first. Drawn over the panel; Back closes it. */
+@Composable
+private fun NowMenu(n: CcNow, onPick: (String) -> Unit) {
+    val first = remember { FocusRequester() }
+    LaunchedEffect(n.title) { delay(60); runCatching { first.requestFocus() } }
+    val start = n.streams.indexOfFirst { it.on }.coerceAtLeast(0)
+    Box(Modifier.fillMaxSize().background(Color(0xE6140F22)).padding(14.dp), contentAlignment = Alignment.Center) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(n.title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(n.label, color = white(.55f), fontSize = 10.sp, modifier = Modifier.padding(bottom = 4.dp))
+            n.streams.forEachIndexed { i, p ->
+                Focusable(Modifier.fillMaxWidth().height(48.dp), RoundedCornerShape(12.dp), bg = if (p.on) Color(0xFF3A3320) else white(.10f),
+                    requester = if (i == start) first else null, onOk = { onPick(p.id) }) {
+                    Column(Modifier.align(Alignment.CenterStart).padding(horizontal = 14.dp)) {
+                        Text(p.title, color = if (p.on) Amber else Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                        if (p.sub.isNotBlank()) Text(p.sub, color = white(.55f), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+            Text("OK switch · Back cancel", color = white(.4f), fontSize = 9.sp)
         }
     }
 }

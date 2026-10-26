@@ -61,12 +61,13 @@ class ControlCenterController(
                 rooms = if (data.has("rooms")) s.rooms else cur.rooms,
                 meals = if (data.has("meals")) s.meals else cur.meals,
             ) }
-            // Open: HA sends the quick parts at once and the slow ones (notifications, catch-up, rooms) a moment later as an
+            // Open: HA sends the quick parts at once and the slow ones (notifications, now playing, catch-up, rooms) a moment later as an
             // "update", so keep showing the last ones we had meanwhile instead of an empty space
             else -> {
                 val last = spec.value
                 val s2 = if (last == null) s else s.copy(
                     notifications = if (data.has("notifications")) s.notifications else last.notifications,
+                    now = if (data.has("now")) s.now else last.now,
                     catchup = if (data.has("catchup")) s.catchup else last.catchup,
                     rooms = if (data.has("rooms")) s.rooms else last.rooms,
                 )

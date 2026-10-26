@@ -12,7 +12,9 @@ import org.json.JSONObject
  *   action        "open" (default) | "update" (refresh content if open) | "close"
  *   page          "home" (default) | "notifications" | "catchup"
  *   subtitle      line under the clock, e.g. "Wednesday 8 October · 9° clear"
- *   now           {label, title, sub, image}
+ *   now           {label, title, sub, image, ok, streams:[{id, title, sub, on}]}   null / no title = no card
+ *                 ok: what OK on the card sends (e.g. the live channel's next stream); streams: the hold-OK picker, each id is
+ *                 sent as it is when picked. With no ok, OK opens the picker; with neither, the card is just shown.
  *   notifications [{id, app, icon, color, when, title, body, thumbs:[url], open}]   open: what OK does
  *                 ("page:catchup", "camera:camera.gate", "action" = send notif_open to HA)
  *   cameras       [{entity, name, image}], camera_status
@@ -28,7 +30,10 @@ import org.json.JSONObject
  *                 presses go back as meals:set:<date>:<choice id|takeaway|leftovers|clear|orig>, meals:item:<id>:<0|1>, meals:q:<id>:<n>, meals:reset.
  * Icons are names: a drawable "cc_<name>" (bundled MDI icons) or an existing drawable of that name.
  */
-data class CcNow(val label: String, val title: String, val sub: String, val image: String?)
+data class CcNow(val label: String, val title: String, val sub: String, val image: String?,
+                 val ok: String = "", val streams: List<CcPick> = emptyList())
+/** One choice in the Now Playing picker (e.g. a live channel's streams); on = the one playing now */
+data class CcPick(val id: String, val title: String, val sub: String, val on: Boolean)
 data class CcNotification(
     val id: String, val app: String, val icon: String, val color: Long, val whenText: String,
     val title: String, val body: String, val thumbs: List<String>, val open: String,
@@ -103,8 +108,10 @@ data class ControlCenterSpec(
             action = o.optString("action", "open").ifBlank { "open" },
             page = o.optString("page", "home").ifBlank { "home" },
             subtitle = o.optString("subtitle"),
-            now = o.optJSONObject("now")?.let {
-                CcNow(it.optString("label"), it.optString("title"), it.optString("sub"), it.str("image"))
+            now = o.optJSONObject("now")?.takeIf { it.optString("title").isNotBlank() }?.let {
+                CcNow(it.optString("label"), it.optString("title"), it.optString("sub"), it.str("image"), it.optString("ok"),
+                    it.optJSONArray("streams").objects().map { p -> CcPick(p.optString("id"), p.optString("title"), p.optString("sub"), p.optBoolean("on")) }
+                        .filter { p -> p.id.isNotBlank() })
             },
             notifications = o.optJSONArray("notifications").objects().map {
                 CcNotification(
